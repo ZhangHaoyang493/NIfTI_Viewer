@@ -25,6 +25,7 @@ class NiiViewerApp:
         self.layout_mode = tk.StringVar(value="dual") # dual, left, right
         self.slice_info_text = tk.StringVar(value="Slice: 0 / 0")
         self.metrics_text = tk.StringVar(value="")
+        self.case_list_title = tk.StringVar(value="病例列表 (0):")
 
         # 缩放和平移状态
         self.zoom_level = 1.0
@@ -53,7 +54,7 @@ class NiiViewerApp:
         btn_open.pack(fill=tk.X, pady=(0, 10))
 
         # 文件夹列表
-        lbl_list = tk.Label(sidebar, text="病例列表:", bg="#f0f0f0", fg="black", anchor="w")
+        lbl_list = tk.Label(sidebar, textvariable=self.case_list_title, bg="#f0f0f0", fg="black", anchor="w")
         lbl_list.pack(fill=tk.X)
         self.case_listbox = tk.Listbox(sidebar, selectmode=tk.SINGLE, fg="black", bg="white")
         self.case_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
@@ -91,9 +92,9 @@ class NiiViewerApp:
                                  bg="#f0f0f0", fg="black", command=self.update_display)
         rb_left.pack(anchor="w")
         
-        rb_right = tk.Radiobutton(layout_frame, text="仅真值 (GT Only)", variable=self.layout_mode, value="right",
-                                  bg="#f0f0f0", fg="black", command=self.update_display)
-        rb_right.pack(anchor="w")
+        self.rb_right = tk.Radiobutton(layout_frame, text="仅真值 (GT Only)", variable=self.layout_mode, value="right",
+                                       bg="#f0f0f0", fg="black", command=self.update_display)
+        self.rb_right.pack(anchor="w")
 
         self.rb_diff = tk.Radiobutton(layout_frame, text="差异分析 (Diff)", variable=self.layout_mode, value="diff",
                                       bg="#f0f0f0", fg="black", command=self.update_display, state=tk.DISABLED)
@@ -157,6 +158,20 @@ class NiiViewerApp:
         if not path:
             return
         
+        # 检查是否包含子文件夹
+        try:
+            # 获取根目录下的第一层内容
+            _, dirs, _ = next(os.walk(path))
+            if not dirs:
+                messagebox.showwarning("目录结构不符合要求", 
+                                       "所选根文件夹内不包含任何子文件夹！\n\n"
+                                       "请选择包含多个病例文件夹的父级目录（例如 WAIYUAN_DATA），\n"
+                                       "而不是直接选择某个病例的文件夹。")
+                return
+        except Exception as e:
+            messagebox.showerror("错误", f"读取目录失败: {e}")
+            return
+        
         self.root_dir = path
         self.scan_directories()
 
@@ -198,6 +213,9 @@ class NiiViewerApp:
 
         # 按名称排序
         self.valid_cases.sort(key=lambda x: x['name'])
+        
+        # 更新数量显示
+        self.case_list_title.set(f"病例列表 ({len(self.valid_cases)}):")
         
         # 添加到列表框
         for case in self.valid_cases:
@@ -255,15 +273,18 @@ class NiiViewerApp:
                        f"Label 2:\n  Dice: {d2:.4f}\n  IoU : {i2:.4f}")
                 self.metrics_text.set(msg)
                 
-                # 启用差异分析
+                # 启用差异分析和GT Only
                 self.rb_diff.config(state=tk.NORMAL)
+                self.rb_right.config(state=tk.NORMAL)
             else:
                 self.metrics_text.set("No Ground Truth")
                 
-                # 禁用差异分析并重置模式
+                # 禁用差异分析和GT Only
                 self.rb_diff.config(state=tk.DISABLED)
-                if self.layout_mode.get() == "diff":
-                    self.layout_mode.set("dual")
+                self.rb_right.config(state=tk.DISABLED)
+                
+                # 自动切换到仅预测模式 (因为没有GT，Dual和Right模式显示会受限或无意义)
+                self.layout_mode.set("left")
 
             # 重置切片索引到中间
             self.total_slices = mri_data.shape[2]
