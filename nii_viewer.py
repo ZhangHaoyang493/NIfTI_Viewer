@@ -22,12 +22,14 @@ class NiiViewerApp:
         self.gamma_val = tk.DoubleVar(value=1.0)
         self.show_pred = tk.BooleanVar(value=True)
         self.show_gt = tk.BooleanVar(value=True)
+        self.auto_fit_window = tk.BooleanVar(value=False) # 新增自适应变量
         self.layout_mode = tk.StringVar(value="dual") # dual, left, right
         self.slice_info_text = tk.StringVar(value="Slice: 0 / 0")
         self.metrics_text = tk.StringVar(value="")
         self.case_list_title = tk.StringVar(value="病例列表 (0):")
 
         # 缩放和平移状态
+        self.rotation_k = 0  # 旋转次数 (k * 90度 逆时针)
         self.zoom_level = 1.0
         self.pan_center_x = 0.5  # 相对坐标 (0.0 - 1.0)
         self.pan_center_y = 0.5
@@ -80,6 +82,10 @@ class NiiViewerApp:
                                 bg="#f0f0f0", fg="black", command=self.update_display)
         chk_gt.pack(anchor="w")
 
+        # 旋转按钮
+        btn_rot = ttk.Button(ctrl_frame, text="旋转 90°", command=self.rotate_image)
+        btn_rot.pack(fill=tk.X, pady=(5, 0))
+
         # 布局控制
         layout_frame = tk.LabelFrame(sidebar, text="窗口布局", bg="#f0f0f0", fg="black", padx=5, pady=5)
         layout_frame.pack(fill=tk.X, pady=10)
@@ -100,6 +106,11 @@ class NiiViewerApp:
                                       bg="#f0f0f0", fg="black", command=self.update_display, state=tk.DISABLED)
         self.rb_diff.pack(anchor="w")
 
+        # 自适应窗口开关
+        chk_autofit = tk.Checkbutton(layout_frame, text="自适应窗口大小", variable=self.auto_fit_window, 
+                                     bg="#f0f0f0", fg="black", command=self.update_display)
+        chk_autofit.pack(anchor="w", pady=(5, 0))
+
         # 切片控制
         slice_frame = tk.Frame(sidebar, bg="#f0f0f0")
         slice_frame.pack(fill=tk.X, pady=(20, 10))
@@ -119,14 +130,16 @@ class NiiViewerApp:
         lbl_metrics.pack(pady=10, fill=tk.X)
 
         # 2. 主显示区
-        main_panel = tk.Frame(self.root, bg="white")
-        main_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        self.main_panel = tk.Frame(self.root, bg="white")
+        self.main_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        # 绑定大小改变事件
+        self.main_panel.bind("<Configure>", self.on_resize)
 
         # 分为左右两块
-        self.panel_left = tk.Label(main_panel, bg="#e0e0e0", text="MRI + Prediction", fg="black")
+        self.panel_left = tk.Label(self.main_panel, bg="#e0e0e0", text="MRI + Prediction", fg="black")
         self.panel_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
         
-        self.panel_right = tk.Label(main_panel, bg="#e0e0e0", text="MRI + Ground Truth", fg="black")
+        self.panel_right = tk.Label(self.main_panel, bg="#e0e0e0", text="MRI + Ground Truth", fg="black")
         self.panel_right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=2)
 
         # 绑定鼠标滚轮事件 (Windows/Linux/Mac兼容)
@@ -150,6 +163,14 @@ class NiiViewerApp:
             # 平移: 左键拖拽
             panel.bind("<ButtonPress-1>", self.on_pan_start)
             panel.bind("<B1-Motion>", self.on_pan_drag)
+
+
+    def rotate_image(self):
+        """顺时针旋转90度"""
+        # np.rot90 默认 k=1 是逆时针90度
+        # 我们想要顺时针，所以用 k=-1 (或者 k=3)
+        self.rotation_k = (self.rotation_k - 1) % 4
+        self.update_display()
 
     def select_root_folder(self):
         """选择根目录并扫描子文件夹"""
@@ -431,8 +452,19 @@ class NiiViewerApp:
         mask_layer = Image.fromarray(rgba_mask, mode="RGBA")
         return Image.alpha_composite(img_pil, mask_layer)
 
-    def process_zoom_pan(self, img_pil, base_height):
-        """应用缩放和平移"""
+    def on_resize(self, event):
+        """窗口大小改变时的回调"""
+        # 只有在开启自适应且有数据加载时才自动刷新
+        if self.auto_fit_window.get() and self.current_case_data:
+            self.update_display()
+
+    def process_zoom_pan(self, img_pil, display_constraints):
+        """
+        应用缩放和平移
+        :param display_constraints: 
+            int: 固定高度模式，值为 height
+            tuple (w, h): 自适应模式，值为容器最大宽高
+        """
         w, h = img_pil.size
         
         # 确保 zoom_level >= 1.0
@@ -462,11 +494,30 @@ class NiiViewerApp:
         crop_box = (left, top, left + fov_w, top + fov_h)
         img_crop = img_pil.crop(crop_box)
         
-        # 计算目标显示尺寸 (保持与原图相同的长宽比，高度固定为 base_height)
-        # 这样无论缩放多少倍，显示在屏幕上的物理尺寸不变，从而达到放大的视觉效果
+        # 计算目标显示尺寸
         aspect_ratio = w / h
-        disp_h = base_height
-        disp_w = int(base_height * aspect_ratio)
+        
+        if isinstance(display_constraints, int):
+            # 固定高度模式
+            disp_h = display_constraints
+            disp_w = int(disp_h * aspect_ratio)
+        else:
+            # 自适应模式 (max_w, max_h)
+            max_w, max_h = display_constraints
+            
+            # 防止无效尺寸
+            if max_w <= 10: max_w = 400
+            if max_h <= 10: max_h = 400
+            
+            win_ratio = max_w / max_h
+            if aspect_ratio > win_ratio:
+                # 图片更宽，以宽为准 (contain)
+                disp_w = max_w
+                disp_h = int(max_w / aspect_ratio)
+            else:
+                # 图片更高，以高为准
+                disp_h = max_h
+                disp_w = int(max_h * aspect_ratio)
         
         img_final = img_crop.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
         self.current_disp_size = (disp_w, disp_h)
@@ -486,19 +537,43 @@ class NiiViewerApp:
         # 获取当前切片数据 (Axial view: [:, :, idx])
         # 不进行旋转，直接使用原始方向
         mri_slice = self.current_case_data['mri'][:, :, idx]
+        # 应用旋转
+        if self.rotation_k != 0:
+            mri_slice = np.rot90(mri_slice, k=self.rotation_k)
         
         pred_slice = None
         if self.current_case_data.get('pred') is not None:
              pred_slice = self.current_case_data['pred'][:, :, idx]
+             if self.rotation_k != 0:
+                 pred_slice = np.rot90(pred_slice, k=self.rotation_k)
         
         gt_slice = None
         if self.current_case_data.get('gt') is not None:
             gt_slice = self.current_case_data['gt'][:, :, idx]
+            if self.rotation_k != 0:
+                gt_slice = np.rot90(gt_slice, k=self.rotation_k)
 
         # --- 布局与图像生成 ---
         mode = self.layout_mode.get()
-        base_height = 512 if mode == "dual" else 750  # 单窗时放大
         
+        # 计算显示约束
+        if self.auto_fit_window.get():
+            # 获取主显示区的实时尺寸
+            mw = self.main_panel.winfo_width()
+            mh = self.main_panel.winfo_height()
+            
+            # 减去一点边距，避免撑爆
+            mw = max(100, mw - 20)
+            mh = max(100, mh - 20)
+            
+            if mode == "dual":
+                display_constraints = (mw // 2, mh)
+            else:
+                display_constraints = (mw, mh)
+        else:
+            # 固定高度模式
+            display_constraints = 512 if mode == "dual" else 750
+
         # 1. 重置布局 (防止残留)
         self.panel_left.pack_forget()
         self.panel_right.pack_forget()
@@ -518,13 +593,13 @@ class NiiViewerApp:
         # --- 生成左图 (MRI + Pred) OR (Diff Map) ---
         if mode in ["dual", "left"]:
             img_left_pil = self.create_overlay(mri_slice, pred_slice, self.show_pred.get())
-            img_left_display = self.process_zoom_pan(img_left_pil, base_height)
+            img_left_display = self.process_zoom_pan(img_left_pil, display_constraints)
             self.tk_img_left = ImageTk.PhotoImage(img_left_display)
             self.panel_left.config(image=self.tk_img_left, text="")
         elif mode == "diff":
             # 差异图模式
             img_diff_pil = self.create_diff_overlay(mri_slice, pred_slice, gt_slice)
-            img_left_display = self.process_zoom_pan(img_diff_pil, base_height)
+            img_left_display = self.process_zoom_pan(img_diff_pil, display_constraints)
             self.tk_img_left = ImageTk.PhotoImage(img_left_display)
             self.panel_left.config(image=self.tk_img_left, text="")
 
@@ -532,7 +607,7 @@ class NiiViewerApp:
         if mode in ["dual", "right"]:
             if gt_slice is not None:
                 img_right_pil = self.create_overlay(mri_slice, gt_slice, self.show_gt.get())
-                img_right_display = self.process_zoom_pan(img_right_pil, base_height)
+                img_right_display = self.process_zoom_pan(img_right_pil, display_constraints)
                 self.tk_img_right = ImageTk.PhotoImage(img_right_display)
                 self.panel_right.config(image=self.tk_img_right, text="")
             else:
