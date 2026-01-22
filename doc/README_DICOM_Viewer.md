@@ -2,7 +2,7 @@
 
 这是一个基于 Python 和 Tkinter 开发的高效 DICOM 序列查看器，支持快速浏览大量病例，筛选 MRI 序列，并一键将其导出为 NIfTI 格式。
 
-![alt text](image-1.png)
+![alt text](../img/DICOM_Viewer.png)
 
 ## 🌟 核心功能
 

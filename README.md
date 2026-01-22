@@ -4,7 +4,7 @@
 
 ## 📦 包含软件
 
-### 1. DICOM Viewer (`dicom_viewer.py`)
+### 1. DICOM Viewer (`src/dicom_viewer.py`)
 用于快速浏览 DICOM 序列数据，支持筛选和格式转换。
 
 *   **主要功能**:
@@ -12,9 +12,9 @@
     *   正则表达式筛选序列（如 `T2`, `Sag`）。
     *   **一键批量导出为 NIfTI** (`.nii.gz`)。
     *   窗宽窗位调整、元数据查看。
-*   **[📄 查看详细文档 (README_DICOM_Viewer)](README_DICOM_Viewer.md)**
+*   **[📄 查看详细文档 (README_DICOM_Viewer)](doc/README_DICOM_Viewer.md)**
 
-### 2. NIfTI Viewer (`nii_viewer.py`)
+### 2. NIfTI Viewer (`src/nii_viewer.py`)
 用于可视化查看和对比医学图像分割结果。
 
 *   **主要功能**:
@@ -22,7 +22,7 @@
     *   **双窗同步**: 左右窗口同步缩放、平移、切片切换。
     *   **差异分析 (Diff)**: 自动高亮显示 False Positive 和 False Negative 区域。
     *   **指标计算**: 实时显示 Dice 和 IoU 评估指标。
-*   **[📄 查看详细文档 (README_NIfTI_Viewer)](README_NIfTI_Viewer.md)**
+*   **[📄 查看详细文档 (README_NIfTI_Viewer)](doc/README_NIfTI_Viewer.md)**
 
 ## 🚀 快速开始
 
@@ -35,8 +35,8 @@ pip install numpy nibabel pillow pydicom SimpleITK
 ### 启动方式
 ```bash
 # 启动 DICOM 浏览器
-python dicom_viewer.py
+python src/dicom_viewer.py
 
 # 启动 NIfTI 对比工具
-python nii_viewer.py
+python src/nii_viewer.py
 ```

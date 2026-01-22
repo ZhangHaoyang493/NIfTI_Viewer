@@ -2,7 +2,7 @@
 
 这是一个基于 Python 和 Tkinter 开发的轻量级医学图像查看器，专为对比 MRI 原图、模型预测结果 (Pred) 和真值标签 (GT/Ground Truth) 而设计。支持 `.nii.gz` 格式。
 
-![alt text](image.png)
+![alt text](../img/NIfTI_Viewer.png)
 
 ## 🌟 核心功能
 
