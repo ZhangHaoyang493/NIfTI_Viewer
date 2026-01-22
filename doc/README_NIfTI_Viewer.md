@@ -31,7 +31,51 @@ pip install numpy nibabel pillow
 *   **Python 版本**: 建议 Python 3.8+
 *   **系统要求**: Windows / macOS / Linux
 
-## 🚀 使用指南
+## � 数据预处理
+
+本工具提供了一个数据预处理脚本 `data_preprocess.py`，用于将平铺的 NIfTI 图像文件整理成 NIfTI Viewer 所需的文件夹结构。
+
+**脚本功能**：自动查找 `_0000.nii.gz` 结尾的图像，创建同名文件夹，并将对应的图像、预测结果（可选）和 GT（可选）移动/复制到该文件夹中。
+
+**使用命令**：
+
+```bash
+python data_preprocess.py -i <图像文件夹> -o <输出文件夹> [-p <预测label>] [-g <GT路径>]
+```
+
+**参数说明**：
+*   `-i`, `--img_dir`: (必须) 原始 nii 图像所在的文件夹（文件名需符合 `*_0000.nii.gz`）。
+*   `-o`, `--out_dir`: (必须) 生成的目标结构文件夹存放路径。
+*   `-p`, `--pred_dir`: (可选) 模型预测 label 所在的文件夹（匹配文件名为 `{名称}.nii.gz`）。
+*   `-g`, `--gt_dir`: (可选) 真实标签 GT 所在的文件夹（匹配文件名为 `{名称}.nii.gz`）。
+
+**使用示例**：
+
+假设已有文件结构：
+```
+raw_data/
+  image_0000.nii.gz
+preds/
+  image.nii.gz
+gts/
+  image.nii.gz
+```
+
+运行命令：
+```bash
+python data_preprocess.py -i ./raw_data -o ./processed_data -p ./preds -g ./gts
+```
+
+将生成：
+```
+processed_data/
+  image/
+    image_0000.nii.gz
+    image_pred.nii.gz
+    image_gt.nii.gz
+```
+
+## �🚀 使用指南
 
 ### 1. 启动软件
 在终端中运行以下命令启动程序：
