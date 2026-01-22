@@ -31,7 +31,7 @@ pip install numpy nibabel pillow
 *   **Python 版本**: 建议 Python 3.8+
 *   **系统要求**: Windows / macOS / Linux
 
-## � 数据预处理
+## 📂 数据准备规范
 
 本软件对输入数据的文件夹结构有严格要求，请确保您的数据符合以下规范：
 
