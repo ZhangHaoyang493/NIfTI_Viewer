@@ -201,13 +201,13 @@ class NiiViewerApp:
                     mri_file = os.path.join(root, f)
 
             # 校验规则
-            # 必须有 MRI 和 Pred
-            if mri_file and pred_file:
+            # 只要有 MRI 即可读取 (支持单文件查看)
+            if mri_file:
                 case_info = {
                     'name': os.path.basename(root),
                     'mri_path': mri_file,
-                    'pred_path': pred_file,
-                    'gt_path': gt_file # Case A时为None，Case B时有值
+                    'pred_path': pred_file, # 可能为 None
+                    'gt_path': gt_file # 可能为 None
                 }
                 self.valid_cases.append(case_info)
 
@@ -242,9 +242,11 @@ class NiiViewerApp:
             if mri_data.ndim == 4:
                 mri_data = mri_data[..., 0] 
             
-            # 加载 Pred
-            pred_img = nib.load(case['pred_path'])
-            pred_data = pred_img.get_fdata().astype(np.int8)
+            # 加载 Pred (可能不存在)
+            pred_data = None
+            if case['pred_path']:
+                pred_img = nib.load(case['pred_path'])
+                pred_data = pred_img.get_fdata().astype(np.int8)
 
             # 加载 GT (如果存在)
             gt_data = None
@@ -253,7 +255,7 @@ class NiiViewerApp:
                 gt_data = gt_img.get_fdata().astype(np.int8)
 
             # 检查维度一致性
-            if mri_data.shape != pred_data.shape:
+            if pred_data is not None and mri_data.shape != pred_data.shape:
                 raise ValueError(f"MRI维度 {mri_data.shape} 与 Pred维度 {pred_data.shape} 不匹配")
             
             if gt_data is not None and mri_data.shape != gt_data.shape:
@@ -266,25 +268,35 @@ class NiiViewerApp:
                 'gt': gt_data
             }
 
-            # 计算指标
-            if gt_data is not None:
+            # 计算指标 & UI状态
+            if pred_data is not None and gt_data is not None:
                 d1, i1, d2, i2 = self.calculate_metrics(pred_data, gt_data)
                 msg = (f"Label 1:\n  Dice: {d1:.4f}\n  IoU : {i1:.4f}\n\n"
                        f"Label 2:\n  Dice: {d2:.4f}\n  IoU : {i2:.4f}")
                 self.metrics_text.set(msg)
                 
-                # 启用差异分析和GT Only
+                # 功能全开
                 self.rb_diff.config(state=tk.NORMAL)
                 self.rb_right.config(state=tk.NORMAL)
             else:
-                self.metrics_text.set("No Ground Truth")
+                # 缺失 Pred 或 GT，部分功能禁用
+                if pred_data is None:
+                    self.metrics_text.set("No Prediction Data")
+                else:
+                    self.metrics_text.set("No Ground Truth")
                 
-                # 禁用差异分析和GT Only
+                # 禁用差异分析
                 self.rb_diff.config(state=tk.DISABLED)
-                self.rb_right.config(state=tk.DISABLED)
                 
-                # 自动切换到仅预测模式 (因为没有GT，Dual和Right模式显示会受限或无意义)
-                self.layout_mode.set("left")
+                # 如果没有GT，禁用GT查看; 否则启用
+                if gt_data is None:
+                    self.rb_right.config(state=tk.DISABLED)
+                else:
+                    self.rb_right.config(state=tk.NORMAL)
+                
+                # 如果当前处于不可用模式(例如Diff)，强制切回左图
+                if self.layout_mode.get() == "diff" or (self.layout_mode.get() == "right" and gt_data is None):
+                     self.layout_mode.set("left")
 
             # 重置切片索引到中间
             self.total_slices = mri_data.shape[2]
@@ -474,10 +486,13 @@ class NiiViewerApp:
         # 获取当前切片数据 (Axial view: [:, :, idx])
         # 不进行旋转，直接使用原始方向
         mri_slice = self.current_case_data['mri'][:, :, idx]
-        pred_slice = self.current_case_data['pred'][:, :, idx]
+        
+        pred_slice = None
+        if self.current_case_data.get('pred') is not None:
+             pred_slice = self.current_case_data['pred'][:, :, idx]
         
         gt_slice = None
-        if self.current_case_data['gt'] is not None:
+        if self.current_case_data.get('gt') is not None:
             gt_slice = self.current_case_data['gt'][:, :, idx]
 
         # --- 布局与图像生成 ---
