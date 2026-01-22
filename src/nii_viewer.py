@@ -17,8 +17,13 @@ class NiiViewerApp:
         self.root_dir = ""
         self.valid_cases = [] # 存储字典: {'name': str, 'mri_path': str, 'pred_path': str, 'gt_path': str or None}
         self.current_case_data = {} # 存储加载后的numpy数组: 'mri', 'pred', 'gt'
+        self.has_pred_folder = False
+        self.has_gt_folder = False
         
         # 显示设置变量
+        self.status_msg = tk.StringVar(value="请选择根文件夹 (需包含 imagesTr [必须], predictsTr [可选], labelsTr [可选])")
+        self.status_color = tk.StringVar(value="black")
+        self.status_metrics_msg = tk.StringVar(value="") # 状态栏的指标信息
         self.gamma_val = tk.DoubleVar(value=1.0)
         self.show_pred = tk.BooleanVar(value=True)
         self.show_gt = tk.BooleanVar(value=True)
@@ -45,6 +50,26 @@ class NiiViewerApp:
 
     def _setup_ui(self):
         """配置界面布局"""
+        # 0. 底部状态栏 (提示栏)
+        # 增大高度：使用 Frame + height / padding
+        status_frame = tk.Frame(self.root, bd=1, relief=tk.SUNKEN, height=35, bg="#f8f8f8")
+        status_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        status_frame.pack_propagate(False) # 允许 height 生效
+
+        # 左侧：状态消息
+        self.lbl_status = tk.Label(status_frame, textvariable=self.status_msg, 
+                                   fg="black", bg="#f8f8f8", font=("Arial", 11))
+        # 增加左侧间距 padx
+        self.lbl_status.pack(side=tk.LEFT, padx=(20, 0))
+        
+        # 中间/紧随：指标信息
+        self.lbl_metrics_bottom = tk.Label(status_frame, textvariable=self.status_metrics_msg,
+                                           fg="blue", bg="#f8f8f8", font=("Arial", 11, "bold"))
+        self.lbl_metrics_bottom.pack(side=tk.LEFT, padx=(30, 0))
+
+        # 动态绑定颜色 (针对状态消息)
+        self.root.bind_all("<<UpdateStatusColor>>", lambda e: self.lbl_status.config(fg=self.status_color.get()))
+
         # 1. 侧边栏
         sidebar = tk.Frame(self.root, width=250, bg="#f0f0f0", padx=10, pady=10)
         sidebar.pack(side=tk.LEFT, fill=tk.Y)
@@ -179,60 +204,83 @@ class NiiViewerApp:
         if not path:
             return
         
-        # 检查是否包含子文件夹
-        try:
-            # 获取根目录下的第一层内容
-            _, dirs, _ = next(os.walk(path))
-            if not dirs:
-                messagebox.showwarning("目录结构不符合要求", 
-                                       "所选根文件夹内不包含任何子文件夹！\n\n"
-                                       "请选择包含多个病例文件夹的父级目录（例如 WAIYUAN_DATA），\n"
-                                       "而不是直接选择某个病例的文件夹。")
-                return
-        except Exception as e:
-            messagebox.showerror("错误", f"读取目录失败: {e}")
+        # 1. 检查 imagesTr 是否存在
+        images_tr_path = os.path.join(path, "imagesTr")
+        if not os.path.exists(images_tr_path) or not os.path.isdir(images_tr_path):
+            messagebox.showwarning("目录结构不符合要求", 
+                                   "所选文件夹不符合规定！\n\n"
+                                   "根目录下必须包含 'imagesTr' 文件夹。")
+            self.status_msg.set("错误：根目录下未找到 'imagesTr' 文件夹")
+            self.status_color.set("red")
+            self.root.event_generate("<<UpdateStatusColor>>")
             return
-        
+
+        # 2. 检查可选文件夹
         self.root_dir = path
+        
+        pred_tr_path = os.path.join(path, "predictsTr")
+        self.has_pred_folder = os.path.exists(pred_tr_path) and os.path.isdir(pred_tr_path)
+        
+        labels_tr_path = os.path.join(path, "labelsTr")
+        self.has_gt_folder = os.path.exists(labels_tr_path) and os.path.isdir(labels_tr_path)
+
+        # 3. 开始扫描
         self.scan_directories()
 
     def scan_directories(self):
-        """扫描逻辑：查找符合 Case A 或 Case B 的文件夹"""
+        """扫描逻辑：基于 {name}_0000.nii.gz 规则查找"""
         self.valid_cases = []
         self.case_listbox.delete(0, tk.END)
+        
+        images_dir = os.path.join(self.root_dir, "imagesTr")
+        
+        # 遍历 imagesTr
+        try:
+            for root, _, files in os.walk(images_dir):
+                for f in files:
+                    # 规则：必须以 _0000.nii.gz 结尾
+                    if not f.endswith('_0000.nii.gz') or f.startswith('._'):
+                        continue
+                        
+                    # 提取 Case Name
+                    # 例如: Case10_0000.nii.gz -> Case10
+                    case_name = f[:-12] 
+                    if not case_name: # 避免空名
+                        continue
+                        
+                    mri_path = os.path.join(root, f)
+                    
+                    # 查找 Pred
+                    pred_path = None
+                    if self.has_pred_folder:
+                        # 预测文件应该是 {name}.nii.gz
+                        p_name = f"{case_name}.nii.gz"
+                        p_path = os.path.join(self.root_dir, "predictsTr", p_name)
+                        if os.path.exists(p_path):
+                            pred_path = p_path
+                            
+                    # 查找 GT
+                    gt_path = None
+                    if self.has_gt_folder:
+                        # GT文件应该是 {name}.nii.gz
+                        g_name = f"{case_name}.nii.gz"
+                        g_path = os.path.join(self.root_dir, "labelsTr", g_name)
+                        if os.path.exists(g_path):
+                            gt_path = g_path
+                            
+                    case_info = {
+                        'name': case_name,
+                        'mri_path': mri_path,
+                        'pred_path': pred_path,
+                        'gt_path': gt_path
+                    }
+                    self.valid_cases.append(case_info)
 
-        for root, dirs, files in os.walk(self.root_dir):
-            # 获取当前文件夹下的所有nii.gz文件
-            nii_files = [f for f in files if f.endswith('.nii.gz') and not f.startswith('._')]
-            if not nii_files:
-                continue
+        except Exception as e:
+            messagebox.showerror("扫描错误", f"扫描过程中发生错误: {e}")
+            return
 
-            pred_file = None
-            gt_file = None
-            mri_file = None
-
-            # 简单的文件名匹配逻辑
-            for f in nii_files:
-                if 'pred' in f:
-                    pred_file = os.path.join(root, f)
-                elif 'gt' in f:
-                    gt_file = os.path.join(root, f)
-                else:
-                    # 假设非pred非gt就是原图 (实际项目中可能需要更严格的规则)
-                    mri_file = os.path.join(root, f)
-
-            # 校验规则
-            # 只要有 MRI 即可读取 (支持单文件查看)
-            if mri_file:
-                case_info = {
-                    'name': os.path.basename(root),
-                    'mri_path': mri_file,
-                    'pred_path': pred_file, # 可能为 None
-                    'gt_path': gt_file # 可能为 None
-                }
-                self.valid_cases.append(case_info)
-
-        # 按名称排序
+        # 按名称排序 (自然排序可能更好，但这里先用字典序)
         self.valid_cases.sort(key=lambda x: x['name'])
         
         # 更新数量显示
@@ -243,7 +291,19 @@ class NiiViewerApp:
             self.case_listbox.insert(tk.END, case['name'])
 
         if not self.valid_cases:
-            messagebox.showinfo("提示", "未找到符合要求的病例文件夹。")
+            messagebox.showinfo("提示", "在 imagesTr 中未找到符合 *_0000.nii.gz 规则的文件。")
+            self.status_msg.set("未找到符合规则的图像文件")
+            self.status_color.set("red")
+        else:
+            msg = f"扫描完成，找到 {len(self.valid_cases)} 个病例。"
+            if not self.has_pred_folder:
+                msg += " (未检测到 predictsTr)"
+            if not self.has_gt_folder:
+                msg += " (未检测到 labelsTr)"
+            self.status_msg.set(msg)
+            self.status_color.set("green")
+        
+        self.root.event_generate("<<UpdateStatusColor>>")
 
     def load_selected_case(self, event):
         """加载选中的病例数据"""
@@ -253,6 +313,22 @@ class NiiViewerApp:
 
         index = selection[0]
         case = self.valid_cases[index]
+
+        # --- 检查并提示缺失文件 ---
+        missing_files = []
+        if self.has_pred_folder and case['pred_path'] is None:
+            missing_files.append("预测")
+        if self.has_gt_folder and case['gt_path'] is None:
+            missing_files.append("GT")
+            
+        if missing_files:
+            msg = f"警告 ({case['name']}): 未找到对应的 {' 和 '.join(missing_files)} 文件"
+            self.status_msg.set(msg)
+            self.status_color.set("red")
+        else:
+            self.status_msg.set(f"成功加载: {case['name']}")
+            self.status_color.set("green") # 使用深绿色看起来更舒适，或者默认绿色
+        self.root.event_generate("<<UpdateStatusColor>>")
 
         try:
             # 加载 MRI
@@ -292,9 +368,16 @@ class NiiViewerApp:
             # 计算指标 & UI状态
             if pred_data is not None and gt_data is not None:
                 d1, i1, d2, i2 = self.calculate_metrics(pred_data, gt_data)
-                msg = (f"Label 1:\n  Dice: {d1:.4f}\n  IoU : {i1:.4f}\n\n"
-                       f"Label 2:\n  Dice: {d2:.4f}\n  IoU : {i2:.4f}")
-                self.metrics_text.set(msg)
+                
+                # 更新侧边栏 (详细)
+                msg_full = (f"Label 1:\n  Dice: {d1:.4f}\n  IoU : {i1:.4f}\n\n"
+                            f"Label 2:\n  Dice: {d2:.4f}\n  IoU : {i2:.4f}")
+                self.metrics_text.set(msg_full)
+                
+                # 更新底部状态栏 (简略)
+                msg_short = f"Dice1:{d1:.3f} Dice2:{d2:.3f} | IoU1:{i1:.3f} IoU2:{i2:.3f}"
+                self.status_metrics_msg.set(msg_short)
+                self.lbl_metrics_bottom.config(fg="blue") # 设置为蓝色区分
                 
                 # 功能全开
                 self.rb_diff.config(state=tk.NORMAL)
@@ -303,8 +386,12 @@ class NiiViewerApp:
                 # 缺失 Pred 或 GT，部分功能禁用
                 if pred_data is None:
                     self.metrics_text.set("No Prediction Data")
+                    self.status_metrics_msg.set("No Pred")
                 else:
                     self.metrics_text.set("No Ground Truth")
+                    self.status_metrics_msg.set("No GT")
+                
+                self.lbl_metrics_bottom.config(fg="gray") # 灰色表示无效
                 
                 # 禁用差异分析
                 self.rb_diff.config(state=tk.DISABLED)
@@ -333,6 +420,7 @@ class NiiViewerApp:
             messagebox.showerror("加载错误", f"无法加载文件: {str(e)}")
             self.current_case_data = {}
             self.metrics_text.set("")
+            self.status_metrics_msg.set("")
             self.panel_left.config(image='', text="Error")
             self.panel_right.config(image='', text="Error")
 

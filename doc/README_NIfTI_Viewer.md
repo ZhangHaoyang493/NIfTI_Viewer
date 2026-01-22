@@ -33,47 +33,32 @@ pip install numpy nibabel pillow
 
 ## � 数据预处理
 
-本工具提供了一个数据预处理脚本 `data_preprocess.py`，用于将平铺的 NIfTI 图像文件整理成 NIfTI Viewer 所需的文件夹结构。
+本软件对输入数据的文件夹结构有严格要求，请确保您的数据符合以下规范：
 
-**脚本功能**：自动查找 `_0000.nii.gz` 结尾的图像，创建同名文件夹，并将对应的图像、预测结果（可选）和 GT（可选）移动/复制到该文件夹中。
+**根目录必须包含以下文件夹**：
+1.  **`imagesTr`** (必须): 存放 MRI 原图。文件名必须以 `_0000.nii.gz` 结尾。
+2.  **`predictsTr`** (可选): 存放模型预测结果。文件名应为 `{CaseName}.nii.gz`。
+3.  **`labelsTr`** (可选): 存放真实标签 (GT)。文件名应为 `{CaseName}.nii.gz`。
 
-**使用命令**：
+**文件对应关系示例**：
+程序会根据原图文件名自动提取 `CaseName` 来匹配预测和GT。
 
-```bash
-python data_preprocess.py -i <图像文件夹> -o <输出文件夹> [-p <预测label>] [-g <GT路径>]
+```text
+Dataset_Root/
+├── imagesTr/                 # [必须] 原图文件夹
+│   ├── Case10_0000.nii.gz    # CaseName = "Case10"
+│   ├── Case11_0000.nii.gz
+│   └── ...
+├── predictsTr/               # [可选] 预测结果文件夹
+│   ├── Case10.nii.gz         # 对应 Case10
+│   ├── Case11.nii.gz
+│   └── ...
+└── labelsTr/                 # [可选] GT 文件夹
+    ├── Case10.nii.gz         # 对应 Case10
+    └── ...
 ```
 
-**参数说明**：
-*   `-i`, `--img_dir`: (必须) 原始 nii 图像所在的文件夹（文件名需符合 `*_0000.nii.gz`）。
-*   `-o`, `--out_dir`: (必须) 生成的目标结构文件夹存放路径。
-*   `-p`, `--pred_dir`: (可选) 模型预测 label 所在的文件夹（匹配文件名为 `{名称}.nii.gz`）。
-*   `-g`, `--gt_dir`: (可选) 真实标签 GT 所在的文件夹（匹配文件名为 `{名称}.nii.gz`）。
-
-**使用示例**：
-
-假设已有文件结构：
-```
-raw_data/
-  image_0000.nii.gz
-preds/
-  image.nii.gz
-gts/
-  image.nii.gz
-```
-
-运行命令：
-```bash
-python data_preprocess.py -i ./raw_data -o ./processed_data -p ./preds -g ./gts
-```
-
-将生成：
-```
-processed_data/
-  image/
-    image_0000.nii.gz
-    image_pred.nii.gz
-    image_gt.nii.gz
-```
+> **提示**：如果缺少 `predictsTr` 或 `labelsTr` 文件夹，相关功能（如 Dice 计算、差异分析）将自动禁用。
 
 ## �🚀 使用指南
 
@@ -86,24 +71,22 @@ python nii_viewer.py
 
 ### 2. 加载数据
 *   点击左上角的 **“选择根文件夹”** 按钮。
-*   选择包含病例子文件夹的目录。
+*   选择包含 `imagesTr`, `predictsTr`, `labelsTr` 的父级目录。
 *   **默认路径**: 软件默认尝试打开 `~/Desktop/WAIYUAN_DATA`。
 *   **文件夹结构要求**:
-    软件会自动识别以下两种结构的子文件夹：
-    *   **Case A (仅预测)**: 包含 MRI 原图 + `*_pred.nii.gz`。
-    *   **Case B (预测 + 真值)**: 包含 MRI 原图 + `*_pred.nii.gz` + `*_gt.nii.gz`。
+    必须包含 `imagesTr` 文件夹。可选 `predictsTr` 和 `labelsTr`。
 *   示例路径：
 ```
-waiyuan_labeled_data_niiViewer
-├── pcfd_1005_0000
+Dataset_Root
+├── imagesTr
 │   ├── pcfd_1005_0000.nii.gz
-│   ├── pcfd_1005_gt.nii.gz（可选）
-│   └── pcfd_1005_pred.nii.gz（可选）
-├── pcfd_1011_0000
-│   ├── pcfd_1011_0000.nii.gz
-│   ├── pcfd_1011_gt.nii.gz（可选）
-│   └── pcfd_1011_pred.nii.gz（可选）
-└── ...
+│   └── ...
+├── predictsTr
+│   ├── pcfd_1005.nii.gz
+│   └── ...
+└── labelsTr
+    ├── pcfd_1005.nii.gz
+    └── ...
 ```
 
 ### 3. 操作说明
