@@ -153,7 +153,7 @@ class NiiViewerApp:
 
     def select_root_folder(self):
         """选择根目录并扫描子文件夹"""
-        default_dir = os.path.expanduser("~/Desktop/WAIYUAN_DATA")
+        default_dir = "/Volumes/Sandisk/WAIYUAN_DATA"
         path = filedialog.askdirectory(initialdir=default_dir)
         if not path:
             return
@@ -182,7 +182,7 @@ class NiiViewerApp:
 
         for root, dirs, files in os.walk(self.root_dir):
             # 获取当前文件夹下的所有nii.gz文件
-            nii_files = [f for f in files if f.endswith('.nii.gz')]
+            nii_files = [f for f in files if f.endswith('.nii.gz') and not f.startswith('._')]
             if not nii_files:
                 continue
 
