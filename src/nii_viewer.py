@@ -358,11 +358,27 @@ class NiiViewerApp:
             if gt_data is not None and mri_data.shape != gt_data.shape:
                 raise ValueError(f"MRI维度 {mri_data.shape} 与 GT维度 {gt_data.shape} 不匹配")
 
+            # --- 计算全局归一化参数 ---
+            # 使用全局统计量进行归一化，避免不同 Slice 亮度跳变
+            # 简单下采样以加速统计
+            try:
+                sample_data = mri_data[::2, ::2, ::2]
+                g_min = np.percentile(sample_data, 0.5) 
+                g_max = np.percentile(sample_data, 99.5)
+            except Exception:
+                g_min = np.min(mri_data)
+                g_max = np.max(mri_data)
+
+            if g_max <= g_min:
+                g_max = g_min + 1
+
             # 存储数据
             self.current_case_data = {
                 'mri': mri_data,
                 'pred': pred_data,
-                'gt': gt_data
+                'gt': gt_data,
+                'global_min': g_min,
+                'global_max': g_max
             }
 
             # 计算指标 & UI状态
@@ -447,11 +463,18 @@ class NiiViewerApp:
 
     def normalize_mri(self, slice_data):
         """将MRI切片归一化到 0-255 并进行 Gamma 变换"""
-        if slice_data.max() == slice_data.min():
+        # 使用全局统计量，如果不存在则退化为局部统计量
+        g_min = self.current_case_data.get('global_min', slice_data.min())
+        g_max = self.current_case_data.get('global_max', slice_data.max())
+        
+        # 截断数据到全局范围内
+        slice_data = np.clip(slice_data, g_min, g_max)
+        
+        if g_max == g_min:
             return np.zeros_like(slice_data, dtype=np.uint8)
         
         # 线性归一化到 0-255
-        norm = (slice_data - slice_data.min()) / (slice_data.max() - slice_data.min()) * 255
+        norm = (slice_data - g_min) / (g_max - g_min) * 255
         
         # Gamma 变换
         gamma = self.gamma_val.get()
