@@ -333,9 +333,11 @@ class NiiViewerApp:
         try:
             # 加载 MRI
             mri_img = nib.load(case['mri_path'])
+            # 转换为 RAS 标准方向，确保切片顺序 (Inferior -> Superior) 与 Slicer 等软件一致
+            mri_img = nib.as_closest_canonical(mri_img)
             mri_data = mri_img.get_fdata()
-            # 确保是标准方向 (RAS)，这里简单处理，实际可能需要 as_closest_canonical
-            # 并且处理 3D vs 4D 数据
+            
+            # 处理 3D vs 4D 数据
             if mri_data.ndim == 4:
                 mri_data = mri_data[..., 0] 
             
@@ -343,12 +345,14 @@ class NiiViewerApp:
             pred_data = None
             if case['pred_path']:
                 pred_img = nib.load(case['pred_path'])
+                pred_img = nib.as_closest_canonical(pred_img)
                 pred_data = pred_img.get_fdata().astype(np.int8)
 
             # 加载 GT (如果存在)
             gt_data = None
             if case['gt_path']:
                 gt_img = nib.load(case['gt_path'])
+                gt_img = nib.as_closest_canonical(gt_img)
                 gt_data = gt_img.get_fdata().astype(np.int8)
 
             # 检查维度一致性
@@ -463,6 +467,9 @@ class NiiViewerApp:
 
     def normalize_mri(self, slice_data):
         """将MRI切片归一化到 0-255 并进行 Gamma 变换"""
+        if slice_data is None:
+            return None
+            
         # 使用全局统计量，如果不存在则退化为局部统计量
         g_min = self.current_case_data.get('global_min', slice_data.min())
         g_max = self.current_case_data.get('global_max', slice_data.max())
@@ -483,6 +490,27 @@ class NiiViewerApp:
         
         return norm.astype(np.uint8)
 
+    def get_slice_view(self, data, idx):
+        """提取切片并转换为 Radiological 视图 (Ant-Top, Right-Left)"""
+        if data is None:
+            return None
+        
+        # 原始数据 (RAS): Dim 0 = L->R, Dim 1 = P->A
+        raw_slice = data[:, :, idx]
+        
+        # 转换为 Radiological View:
+        # 目标: Rows = A->P (Top=Ant), Cols = R->L (Left=Right)
+        
+        # 1. Transpose: (X, Y) -> (Y, X) => Rows: P->A, Cols: L->R
+        # 2. Flip Both: Rows: A->P, Cols: R->L
+        slice_radio = raw_slice.T[::-1, ::-1]
+        
+        # 应用用户旋转
+        if self.rotation_k != 0:
+            slice_radio = np.rot90(slice_radio, k=self.rotation_k)
+            
+        return slice_radio
+
     def create_overlay(self, mri_slice, mask_slice, color_mask_enabled=True):
         """
         创建叠加图像
@@ -490,6 +518,9 @@ class NiiViewerApp:
         :param mask_slice: 2D numpy array (Label values 0, 1, 2)
         :param color_mask_enabled: bool, 是否显示颜色叠加
         """
+        if mri_slice is None:
+            return None
+            
         # 1. 准备底图 MRI -> RGBA
         mri_norm = self.normalize_mri(mri_slice)
         # 将灰度转为 RGBA
@@ -500,11 +531,10 @@ class NiiViewerApp:
 
         # 2. 准备 Mask 层
         # 创建一个全透明的 RGBA 图像
-        overlay = Image.new("RGBA", img_pil.size, (0, 0, 0, 0))
-        width, height = img_pil.size
+        # overlay = Image.new("RGBA", img_pil.size, (0, 0, 0, 0)) # Unused
+        # width, height = img_pil.size # Unused
         
         # 我们使用 numpy 快速操作而不是逐像素遍历
-        # 注意: PIL Image 和 numpy 数组的坐标系转换 (W, H) vs (H, W)
         # mask_slice.T 是因为 image.fromarray 默认行是高度
         # 这里为了简化，我们先生成 numpy RGBA 数组
         
@@ -645,24 +675,10 @@ class NiiViewerApp:
         # 更新文本信息
         self.slice_info_text.set(f"Slice: {idx + 1} / {self.total_slices}")
 
-        # 获取当前切片数据 (Axial view: [:, :, idx])
-        # 不进行旋转，直接使用原始方向
-        mri_slice = self.current_case_data['mri'][:, :, idx]
-        # 应用旋转
-        if self.rotation_k != 0:
-            mri_slice = np.rot90(mri_slice, k=self.rotation_k)
-        
-        pred_slice = None
-        if self.current_case_data.get('pred') is not None:
-             pred_slice = self.current_case_data['pred'][:, :, idx]
-             if self.rotation_k != 0:
-                 pred_slice = np.rot90(pred_slice, k=self.rotation_k)
-        
-        gt_slice = None
-        if self.current_case_data.get('gt') is not None:
-            gt_slice = self.current_case_data['gt'][:, :, idx]
-            if self.rotation_k != 0:
-                gt_slice = np.rot90(gt_slice, k=self.rotation_k)
+        # 使用 helper 获取转换视角的切片
+        mri_slice = self.get_slice_view(self.current_case_data['mri'], idx)
+        pred_slice = self.get_slice_view(self.current_case_data.get('pred'), idx)
+        gt_slice = self.get_slice_view(self.current_case_data.get('gt'), idx)
 
         # --- 布局与图像生成 ---
         mode = self.layout_mode.get()
