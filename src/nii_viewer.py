@@ -27,7 +27,7 @@ class NiiViewerApp:
         self.gamma_val = tk.DoubleVar(value=1.0)
         self.show_pred = tk.BooleanVar(value=True)
         self.show_gt = tk.BooleanVar(value=True)
-        self.auto_fit_window = tk.BooleanVar(value=False) # 新增自适应变量
+        self.auto_fit_window = tk.BooleanVar(value=True) # 新增自适应变量
         self.layout_mode = tk.StringVar(value="dual") # dual, left, right
         self.slice_info_text = tk.StringVar(value="Slice: 0 / 0")
         self.metrics_text = tk.StringVar(value="")
@@ -41,6 +41,20 @@ class NiiViewerApp:
         self.drag_start_x = 0
         self.drag_start_y = 0
 
+        # 编辑功能变量
+        self.edit_mode = tk.BooleanVar(value=False)
+        self.current_tool = tk.StringVar(value="pen") # pen, eraser, wand
+        self.edit_label_val = tk.IntVar(value=1) # 1 or 2
+        self.brush_size = tk.IntVar(value=1)
+        self.wand_tolerance = tk.IntVar(value=20)
+        self.undo_stack = [] # List[Tuple(slice_idx, slice_data_copy)]
+        self.last_export_dir = os.path.expanduser("~")
+        self.editable_mask = None # 3D numpy array
+        self.edit_source = None # 'gt', 'pred', 'blank'
+        self.is_drawing = False
+        self.preview_cursor_pos = None # (x, y) internal image coordinates
+        self.previous_layout_mode = None
+
         # 防止图片被垃圾回收
         self.tk_img_left = None
         self.tk_img_right = None
@@ -50,6 +64,47 @@ class NiiViewerApp:
 
     def _setup_ui(self):
         """配置界面布局"""
+        # --- 顶部工具栏 (编辑工具) ---
+        toolbar = tk.Frame(self.root, bg="#e0e0e0", height=40)
+        toolbar.pack(side=tk.TOP, fill=tk.X)
+        
+        # Edit Toggle
+        chk_edit = tk.Checkbutton(toolbar, text="开启编辑模式", variable=self.edit_mode, 
+                                  bg="#e0e0e0", fg="black", command=self.toggle_edit_mode)
+        chk_edit.pack(side=tk.LEFT, padx=10)
+        
+        # Separator
+        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
+        
+        # Tools
+        self.tool_frame = tk.Frame(toolbar, bg="#e0e0e0")
+        self.tool_frame.pack(side=tk.LEFT)
+        
+        tk.Label(self.tool_frame, text="工具:", bg="#e0e0e0", fg="black").pack(side=tk.LEFT, padx=5)
+        
+        rb_pen = tk.Radiobutton(self.tool_frame, text="画笔", variable=self.current_tool, value="pen", bg="#e0e0e0", fg="black")
+        rb_pen.pack(side=tk.LEFT)
+        
+        rb_erase = tk.Radiobutton(self.tool_frame, text="橡皮擦", variable=self.current_tool, value="eraser", bg="#e0e0e0", fg="black")
+        rb_erase.pack(side=tk.LEFT)
+        
+        rb_wand = tk.Radiobutton(self.tool_frame, text="魔棒", variable=self.current_tool, value="wand", bg="#e0e0e0", fg="black")
+        rb_wand.pack(side=tk.LEFT)
+        
+        # Label Value
+        tk.Label(self.tool_frame, text="| 标签值:", bg="#e0e0e0", fg="black").pack(side=tk.LEFT, padx=5)
+        tk.Radiobutton(self.tool_frame, text="Label 1", variable=self.edit_label_val, value=1, bg="#e0e0e0", fg="black").pack(side=tk.LEFT)
+        tk.Radiobutton(self.tool_frame, text="Label 2", variable=self.edit_label_val, value=2, bg="#e0e0e0", fg="black").pack(side=tk.LEFT)
+        
+        # Settings
+        tk.Label(self.tool_frame, text="| 大小/阈值:", bg="#e0e0e0", fg="black").pack(side=tk.LEFT, padx=5)
+        tk.Scale(self.tool_frame, from_=1, to=10, variable=self.brush_size, orient=tk.HORIZONTAL, length=80, bg="#e0e0e0", fg="black").pack(side=tk.LEFT)
+        tk.Entry(self.tool_frame, textvariable=self.wand_tolerance, width=4, bg="white", fg="black").pack(side=tk.LEFT, padx=2)
+        
+        # Actions
+        tk.Button(self.tool_frame, text="撤销 (Ctrl+Z)", command=self.undo_action, bg="#e0e0e0", fg="black").pack(side=tk.LEFT, padx=10)
+        tk.Button(self.tool_frame, text="导出 Label", command=self.export_label, bg="lightblue", fg="black").pack(side=tk.LEFT, padx=5)
+
         # 0. 底部状态栏 (提示栏)
         # 增大高度：使用 Frame + height / padding
         status_frame = tk.Frame(self.root, bd=1, relief=tk.SUNKEN, height=35, bg="#f8f8f8")
@@ -185,9 +240,84 @@ class NiiViewerApp:
             panel.bind("<Control-Button-4>", self.on_zoom)
             panel.bind("<Control-Button-5>", self.on_zoom)
             
-            # 平移: 左键拖拽
-            panel.bind("<ButtonPress-1>", self.on_pan_start)
-            panel.bind("<B1-Motion>", self.on_pan_drag)
+            # 平移: 左键拖拽 (非编辑模式) 或 右键拖拽 (编辑模式)
+            panel.bind("<ButtonPress-1>", self.on_mouse_down)
+            panel.bind("<B1-Motion>", self.on_mouse_drag)
+            panel.bind("<ButtonRelease-1>", self.on_mouse_up)
+            
+            # 中键平移 (编辑模式专用)
+            panel.bind("<ButtonPress-2>", self.on_pan_start)
+            panel.bind("<B2-Motion>", self.on_pan_drag)
+            panel.bind("<ButtonRelease-2>", self.on_pan_end)
+            
+            # 鼠标移动 (用于预览)
+            panel.bind("<Motion>", self.on_mouse_move)
+            panel.bind("<Leave>", self.on_mouse_leave)
+            
+        # 绑定 Undo 快捷键
+        self.root.bind("<Control-z>", lambda e: self.undo_action())
+        self.root.bind("<Command-z>", lambda e: self.undo_action()) # Mac Support
+
+        # 初始化工具栏状态 (必须在 UI 元素创建完成后调用)
+        self.toggle_edit_mode()
+
+    def toggle_edit_mode(self):
+        """切换编辑模式状态"""
+        is_editing = self.edit_mode.get()
+        # 启用/禁用工具栏控件
+        state = tk.NORMAL if is_editing else tk.DISABLED
+        for child in self.tool_frame.winfo_children():
+            try:
+                child.configure(state=state)
+            except:
+                pass 
+        
+        # 切换布局：如果进入编辑模式，强制显示 Editor (Right Panel)
+        if is_editing:
+            # 保存当前布局模式
+            self.previous_layout_mode = self.layout_mode.get()
+            # 自动切换到右侧编辑窗口
+            self.layout_mode.set("right")
+            self.rb_right.config(state=tk.NORMAL, text="编辑器 (Right)")
+            
+            # 如果editable_mask未初始化，则根据优先级设置
+            if self.editable_mask is None and self.current_case_data:
+                gt_data = self.current_case_data.get('gt')
+                pred_data = self.current_case_data.get('pred')
+                mri_data = self.current_case_data['mri']
+                if gt_data is not None:
+                    self.editable_mask = gt_data.copy()
+                    self.edit_source = 'gt'
+                elif pred_data is not None:
+                    self.editable_mask = pred_data.copy()
+                    self.edit_source = 'pred'
+                else:
+                    self.editable_mask = np.zeros_like(mri_data, dtype=np.int8)
+                    self.edit_source = 'blank'
+            else:
+                # editable_mask已存在，使用已记录的来源
+                pass
+            
+            # 更新状态栏显示编辑来源
+            source_text = {
+                'gt': 'GT标签',
+                'pred': '模型预测', 
+                'blank': '原图'
+            }.get(self.edit_source, '未知')
+            self.status_metrics_msg.set(f"编辑基于: {source_text}")
+            self.lbl_metrics_bottom.config(fg="blue")
+        else:
+            # 退出编辑模式，恢复之前的布局
+            if self.previous_layout_mode:
+                self.layout_mode.set(self.previous_layout_mode)
+                self.previous_layout_mode = None
+            self.rb_right.config(text="仅真值 (GT Only)")
+            
+            # 清除编辑状态信息
+            self.status_metrics_msg.set("")
+            self.lbl_metrics_bottom.config(fg="gray")
+            
+        self.update_display()
 
 
     def rotate_image(self):
@@ -426,6 +556,20 @@ class NiiViewerApp:
                 if self.layout_mode.get() == "diff" or (self.layout_mode.get() == "right" and gt_data is None):
                      self.layout_mode.set("left")
 
+            # --- 初始化编辑 Mask ---
+            # 优先使用 GT，如果没有则使用 Pred，再没有则全0
+            if gt_data is not None:
+                self.editable_mask = gt_data.copy()
+                self.edit_source = 'gt'
+            elif pred_data is not None:
+                self.editable_mask = pred_data.copy()
+                self.edit_source = 'pred'
+            else:
+                self.editable_mask = np.zeros_like(mri_data, dtype=np.int8)
+                self.edit_source = 'blank'
+            
+            self.undo_stack.clear() # 清空撤销栈
+
             # 重置切片索引到中间
             self.total_slices = mri_data.shape[2]
             self.current_slice_index = self.total_slices // 2
@@ -511,12 +655,14 @@ class NiiViewerApp:
             
         return slice_radio
 
-    def create_overlay(self, mri_slice, mask_slice, color_mask_enabled=True):
+    def create_overlay(self, mri_slice, mask_slice, color_mask_enabled=True, preview_mask=None, preview_val=1):
         """
         创建叠加图像
         :param mri_slice: 2D numpy array (MRI values)
         :param mask_slice: 2D numpy array (Label values 0, 1, 2)
-        :param color_mask_enabled: bool, 是否显示颜色叠加
+        :param color_mask_enabled: bool
+        :param preview_mask: 2D boolean array (Preview mask)
+        :param preview_val: int (Label value for preview)
         """
         if mri_slice is None:
             return None
@@ -526,31 +672,40 @@ class NiiViewerApp:
         # 将灰度转为 RGBA
         img_pil = Image.fromarray(mri_norm).convert("RGBA")
 
-        if not color_mask_enabled or mask_slice is None:
+        # 2. 准备 Mask 层 (包含已有 Label 和 预览)
+        if (not color_mask_enabled or mask_slice is None) and preview_mask is None:
             return img_pil
 
-        # 2. 准备 Mask 层
-        # 创建一个全透明的 RGBA 图像
-        # overlay = Image.new("RGBA", img_pil.size, (0, 0, 0, 0)) # Unused
-        # width, height = img_pil.size # Unused
-        
-        # 我们使用 numpy 快速操作而不是逐像素遍历
-        # mask_slice.T 是因为 image.fromarray 默认行是高度
-        # 这里为了简化，我们先生成 numpy RGBA 数组
-        
         rgba_mask = np.zeros((mri_slice.shape[0], mri_slice.shape[1], 4), dtype=np.uint8)
         
-        # Label 1: 透明黄色 (255, 255, 0, alpha=76)  (76 ≈ 0.3 * 255)
-        rgba_mask[mask_slice == 1] = [0, 255, 0, 76]
-        
-        # Label 2: 透明绿色 (0, 255, 0, alpha=76)
-        rgba_mask[mask_slice == 2] = [255, 255, 0, 76] 
+        # 绘制已有 Label
+        if color_mask_enabled and mask_slice is not None:
+            # Label 1: 透明绿
+            rgba_mask[mask_slice == 1] = [0, 255, 0, 76]
+            # Label 2: 透明黄
+            rgba_mask[mask_slice == 2] = [255, 255, 0, 76] 
+
+        # 绘制预览 Label (覆盖在上面)
+        if preview_mask is not None:
+             # 设置预览颜色，稍微不透明一点以便区分，或者加个边框效果(这里简单处理)
+             # Label 1: 亮绿 [0, 255, 0, 150]
+             # Label 2: 亮黄 [255, 255, 0, 150]
+             # Eraser (val=0): 红色或者是擦除效果? 
+             # 如果是橡皮擦，preview_val应为0，我们可以显示红色半透明表示即将被擦除的区域
+             
+             if preview_val == 1:
+                 color = [0, 255, 0, 160]
+             elif preview_val == 2:
+                 color = [255, 255, 0, 160]
+             else: # Eraser / 0
+                 color = [255, 0, 0, 128] # 红色示警
+                 
+             rgba_mask[preview_mask] = color
 
         # 转换为 PIL Overlay
         mask_layer = Image.fromarray(rgba_mask, mode="RGBA")
 
         # 3. 混合
-        # alpha_composite 需要两张图都是 RGBA
         combined = Image.alpha_composite(img_pil, mask_layer)
         return combined
 
@@ -660,7 +815,7 @@ class NiiViewerApp:
                 disp_h = max_h
                 disp_w = int(max_h * aspect_ratio)
         
-        img_final = img_crop.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
+        img_final = img_crop.resize((disp_w, disp_h), Image.Resampling.NEAREST)
         self.current_disp_size = (disp_w, disp_h)
         
         return img_final
@@ -730,15 +885,334 @@ class NiiViewerApp:
             self.tk_img_left = ImageTk.PhotoImage(img_left_display)
             self.panel_left.config(image=self.tk_img_left, text="")
 
-        # --- 生成右图 (MRI + GT or Empty) ---
+        # --- 生成右图 (MRI + GT or Empty or Edited) ---
         if mode in ["dual", "right"]:
-            if gt_slice is not None:
+            # 如果在编辑模式，优先显示 editable_mask
+            if self.edit_mode.get() and self.editable_mask is not None:
+                # 获取切片视图，确保方向正确
+                mask_slice = self.get_slice_view(self.editable_mask, idx)
+                
+                # 生成预览 Mask
+                preview_mask = None
+                preview_val = 1
+                if self.preview_cursor_pos:
+                    px, py = self.preview_cursor_pos
+                    # 获取 MRI slice view 用于 wand 计算 (如果需要)
+                    # 注意: get_tool_mask 需要的是 view 坐标系下的数据
+                    # mri_slice 已经是 view
+                    preview_mask = self.get_tool_mask(self.current_tool.get(), px, py, mri_slice)
+                    preview_val = self.edit_label_val.get() if self.current_tool.get() != "eraser" else 0
+                
+                img_right_pil = self.create_overlay(mri_slice, mask_slice, self.show_gt.get(), preview_mask, preview_val)
+                img_right_display = self.process_zoom_pan(img_right_pil, display_constraints)
+                self.tk_img_right = ImageTk.PhotoImage(img_right_display)
+                self.panel_right.config(image=self.tk_img_right, text="")
+            elif gt_slice is not None:
                 img_right_pil = self.create_overlay(mri_slice, gt_slice, self.show_gt.get())
                 img_right_display = self.process_zoom_pan(img_right_pil, display_constraints)
                 self.tk_img_right = ImageTk.PhotoImage(img_right_display)
                 self.panel_right.config(image=self.tk_img_right, text="")
             else:
                 self.panel_right.config(image='', text="No Ground Truth Available")
+
+    def screen_to_image_coords(self, sx, sy, img_w, img_h):
+        """将屏幕坐标转换为 Slice 图像坐标"""
+        if not hasattr(self, 'current_disp_size') or not self.current_disp_size:
+             return 0, 0
+             
+        disp_w, disp_h = self.current_disp_size
+        
+        # 获取 Panel 尺寸来计算居中偏移 (Tkinter Label 默认居中显示图像)
+        # 这里使用 panel_right 的尺寸，因为编辑主要在右侧进行
+        # 如果将来需要在左侧编辑，需要传入 widget 参数区分
+        p_w = self.panel_right.winfo_width()
+        p_h = self.panel_right.winfo_height()
+        
+        off_x = (p_w - disp_w) // 2
+        off_y = (p_h - disp_h) // 2
+        
+        # 修正屏幕坐标到图像显示区域坐标
+        sx_adj = sx - off_x
+        sy_adj = sy - off_y
+        
+        # 1. 反转 Zoom/Pan 裁剪
+        # process_zoom_pan 逻辑:
+        # fov_w = w / zoom
+        # left = center_x * w - fov/2
+        # crop_x = left + (sx / disp_w) * fov_w
+        
+        fov_w = img_w / self.zoom_level
+        fov_h = img_h / self.zoom_level
+        
+        left = (self.pan_center_x * img_w) - (fov_w / 2)
+        top = (self.pan_center_y * img_h) - (fov_h / 2)
+        
+        # Clamp
+        if left < 0: left = 0
+        if left + fov_w > img_w: left = img_w - fov_w
+        if top < 0: top = 0
+        if top + fov_h > img_h: top = img_h - fov_h
+        
+        rel_x = sx_adj / disp_w
+        rel_y = sy_adj / disp_h
+        
+        img_x = left + (rel_x * fov_w)
+        img_y = top + (rel_y * fov_h)
+        
+        return int(img_x), int(img_y)
+
+    def on_mouse_move(self, event):
+        """处理鼠标移动 (用于预览)"""
+        if not self.edit_mode.get() or self.editable_mask is None:
+            return
+        
+        # 仅在右侧面板处理预览
+        if event.widget != self.panel_right:
+            if self.preview_cursor_pos is not None:
+                self.preview_cursor_pos = None
+                self.update_display()
+            return
+            
+        # 注意: 这里我们需要 View 的尺寸来做坐标转换
+        # 传递整个 Mri 数据到 get_slice_view，而不是部分切片
+        mri_view = self.get_slice_view(self.current_case_data['mri'], self.current_slice_index)
+        view_h, view_w = mri_view.shape
+        
+        img_x, img_y = self.screen_to_image_coords(event.x, event.y, view_w, view_h)
+        
+        # 如果超出边界，不显示预览
+        if not (0 <= img_x < view_w and 0 <= img_y < view_h):
+             if self.preview_cursor_pos is not None:
+                 self.preview_cursor_pos = None
+                 self.update_display()
+             return
+
+        # 更新预览位置并请求重绘
+        self.preview_cursor_pos = (img_x, img_y)
+        self.update_display()
+
+    def on_mouse_leave(self, event):
+        """鼠标离开控件"""
+        if self.preview_cursor_pos is not None:
+            self.preview_cursor_pos = None
+            self.update_display()
+
+    def on_mouse_down(self, event):
+        """处理鼠标按下: 如果是编辑模式则开始绘制，否则平移"""
+        if self.edit_mode.get() and self.editable_mask is not None:
+            # 判断是否点击在右侧面板 (或双窗模式下的右半屏)
+            if event.widget == self.panel_right:
+                self.is_drawing = True
+                self.start_edit_action() # 准备 Undo 栈
+                self.apply_tool(event.x, event.y)
+                return
+
+        # 非编辑模式或非右侧面板时，开始左键平移
+        self.on_pan_start(event)
+
+    def on_mouse_drag(self, event):
+        if self.is_drawing:
+            # 更新预览位置
+            mri_view = self.get_slice_view(self.current_case_data['mri'], self.current_slice_index)
+            view_h, view_w = mri_view.shape
+            img_x, img_y = self.screen_to_image_coords(event.x, event.y, view_w, view_h)
+            
+            if 0 <= img_x < view_w and 0 <= img_y < view_h:
+                 self.preview_cursor_pos = (img_x, img_y)
+                 
+            self.apply_tool(event.x, event.y)
+        else:
+            self.on_pan_drag(event)
+
+    def on_mouse_up(self, event):
+        if self.is_drawing:
+            self.is_drawing = False
+        else:
+            # Pan end
+            pass
+
+    def start_edit_action(self):
+        """开始新的编辑动作时，保存当前切片状态到撤销栈"""
+        if self.editable_mask is None:
+            return
+            
+        idx = self.current_slice_index
+        # 保存当前切片的副本
+        # 注意：这里我们保存的是原始数据的副本 (RAS 空间)，而不是视图
+        # 因为后续恢复时是直接覆盖 3D array 的这一层
+        current_slice_data = self.editable_mask[:, :, idx].copy()
+        
+        self.undo_stack.append((idx, current_slice_data))
+        # 限制栈大小
+        if len(self.undo_stack) > 20:
+            self.undo_stack.pop(0)
+
+    def undo_action(self):
+        """撤销上一次编辑"""
+        if not self.undo_stack:
+            return
+            
+        idx, old_data = self.undo_stack.pop()
+        
+        # 恢复数据
+        self.editable_mask[:, :, idx] = old_data
+        
+        # 如果当前就在这个切片，刷新显示
+        if idx == self.current_slice_index:
+            self.update_display()
+
+    def get_tool_mask(self, tool, img_x, img_y, mri_view):
+        """
+        计算当前工具产生的 Mask (View 坐标系)
+        :param tool: 'pen', 'eraser', 'wand'
+        :param img_x, img_y: 坐标
+        :param mri_view: 当前显示的 MRI 切片 (用于 wand)
+        """
+        h, w = mri_view.shape
+        radius = self.brush_size.get()
+        
+        y, x = np.ogrid[:h, :w]
+        
+        if tool in ["pen", "eraser"]:
+            # 圆形笔刷
+            dist_sq = (x - img_x)**2 + (y - img_y)**2
+            mask = dist_sq <= radius**2
+            return mask
+            
+        elif tool == "wand":
+            # 返回连通区域 mask
+            # 为了预览性能，我们可以做一些降级，但先尝试直接计算
+            mask = np.zeros_like(mri_view, dtype=bool)
+            self.region_grow_optimize(mri_view, mask, img_x, img_y, self.wand_tolerance.get())
+            return mask
+        
+        return None
+
+    def apply_tool(self, sx, sy):
+        """应用画笔/橡皮擦/魔棒"""
+        if self.editable_mask is None:
+            return
+            
+        idx = self.current_slice_index
+        
+        # 1. 获取当前切片的 View (用于坐标映射和读取 intensities)
+        mri_view = self.get_slice_view(self.current_case_data['mri'], idx)
+        mask_view = self.get_slice_view(self.editable_mask, idx)
+        
+        # 2. 转换坐标
+        h, w = mask_view.shape
+        img_x, img_y = self.screen_to_image_coords(sx, sy, w, h)
+        
+        if not (0 <= img_x < w and 0 <= img_y < h):
+            return
+
+        tool = self.current_tool.get()
+        target_val = self.edit_label_val.get() if tool != "eraser" else 0
+        
+        # 获取修改 Mask (View空间)
+        change_mask = self.get_tool_mask(tool, img_x, img_y, mri_view)
+        
+        if change_mask is not None:
+            # 应用修改
+            mask_view[change_mask] = target_val
+
+        self.update_display()
+
+    def region_grow_optimize(self, img, mask, seed_x, seed_y, tolerance):
+        """
+        优化的区域生长/泛洪填充算法
+        :param img: 2D MRI slice
+        :param mask: 2D Bool Mask (Output)
+        """
+        h, w = img.shape
+        seed_val = img[seed_y, seed_x]
+        
+        # 全局二值化 + 连通域标记 可能会更快?
+        # 1. 找到所有 pixel 满足 tolerance
+        diff = np.abs(img.astype(np.int16) - seed_val)
+        binary_map = diff <= tolerance
+        
+        if not binary_map[seed_y, seed_x]:
+             return # Seed not valid? should be
+             
+        # 2. 找到与 seed 连接的区域
+        # 使用 BFS
+        # 为了性能, 我们使用 deque (或者 list pop(0))
+        # 也可以手动 while loop + 4 neighbors
+        
+        visited = np.zeros_like(img, dtype=bool)
+        stack = [(seed_x, seed_y)]
+        visited[seed_y, seed_x] = True
+        mask[seed_y, seed_x] = True
+        
+        # 设定一个上限以防卡死 (例如 50000 像素)
+        count = 0
+        max_pixels = w * h # 允许全图
+        
+        while stack:
+            cx, cy = stack.pop()
+            count += 1
+            if count > max_pixels: break
+            
+            for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
+                nx, ny = cx + dx, cy + dy
+                if 0 <= nx < w and 0 <= ny < h:
+                    if not visited[ny, nx] and binary_map[ny, nx]:
+                        visited[ny, nx] = True
+                        mask[ny, nx] = True
+                        stack.append((nx, ny))
+
+    def export_label(self):
+        """导出编辑后的 Label"""
+        if self.editable_mask is None:
+            messagebox.showwarning("警告", "没有可导出的编辑数据")
+            return
+            
+        # 检查是否有选中的case
+        try:
+            selection = self.case_listbox.curselection()
+            if not selection:
+                messagebox.showwarning("警告", "请先选择一个病例")
+                return
+            current_case = self.valid_cases[selection[0]]
+        except (IndexError, TypeError):
+            messagebox.showerror("错误", "无法获取当前病例信息")
+            return
+        
+        # 默认文件名
+        case_name = current_case.get('name', 'unknown_case')
+        if not case_name or case_name.strip() == '':
+            case_name = 'unknown_case'
+        default_name = f"{case_name}_gt_new.nii.gz"
+        
+        # 确保初始目录存在
+        if not os.path.exists(self.last_export_dir):
+            self.last_export_dir = os.path.expanduser("~")
+        
+        file_path = filedialog.asksaveasfilename(
+            initialdir=self.last_export_dir,
+            initialfile=default_name
+        )
+        
+        if not file_path:
+            return
+            
+        try:
+            # 更新上次路径
+            self.last_export_dir = os.path.dirname(file_path)
+            
+            # 构造 NIfTI 对象
+            # 重要: 使用原始 MRI 的 affine header，确保空间位置一致
+            ref_img = nib.load(current_case['mri_path'])
+            ref_img = nib.as_closest_canonical(ref_img) # 确保与我们编辑的空间一致
+            
+            new_img = nib.Nifti1Image(self.editable_mask.astype(np.float32), ref_img.affine, ref_img.header)
+            nib.save(new_img, file_path)
+            
+            messagebox.showinfo("导出成功", f"Label 已保存至:\n{file_path}")
+            
+        except Exception as e:
+            messagebox.showerror("导出失败", f"保存文件时出错:\n{e}")
 
     def on_scroll(self, event):
         """处理鼠标滚轮事件，实现双窗同步"""
@@ -835,6 +1309,10 @@ class NiiViewerApp:
         self.drag_start_y = event.y
         
         self.update_display()
+
+    def on_pan_end(self, event):
+        """结束右键平移"""
+        pass
 
 if __name__ == "__main__":
     root = tk.Tk()
