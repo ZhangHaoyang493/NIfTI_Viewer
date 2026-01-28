@@ -46,7 +46,7 @@ class NiiViewerApp:
         self.current_tool = tk.StringVar(value="pen") # pen, eraser, wand
         self.edit_label_val = tk.IntVar(value=1) # 1 or 2
         self.brush_size = tk.IntVar(value=1)
-        self.wand_tolerance = tk.IntVar(value=20)
+        self.wand_tolerance = tk.IntVar(value=5)
         self.undo_stack = [] # List[Tuple(slice_idx, slice_data_copy)]
         self.last_export_dir = os.path.expanduser("~")
         self.editable_mask = None # 3D numpy array
@@ -96,14 +96,19 @@ class NiiViewerApp:
         tk.Radiobutton(self.tool_frame, text="Label 1", variable=self.edit_label_val, value=1, bg="#e0e0e0", fg="black").pack(side=tk.LEFT)
         tk.Radiobutton(self.tool_frame, text="Label 2", variable=self.edit_label_val, value=2, bg="#e0e0e0", fg="black").pack(side=tk.LEFT)
         
-        # Settings
-        tk.Label(self.tool_frame, text="| 大小/阈值:", bg="#e0e0e0", fg="black").pack(side=tk.LEFT, padx=5)
-        tk.Scale(self.tool_frame, from_=1, to=10, variable=self.brush_size, orient=tk.HORIZONTAL, length=80, bg="#e0e0e0", fg="black").pack(side=tk.LEFT)
-        tk.Entry(self.tool_frame, textvariable=self.wand_tolerance, width=4, bg="white", fg="black").pack(side=tk.LEFT, padx=2)
+        # Settings - Brush
+        tk.Label(self.tool_frame, text="| 笔刷大小:", bg="#e0e0e0", fg="black").pack(side=tk.LEFT, padx=(10, 2))
+        tk.Scale(self.tool_frame, from_=1, to=10, variable=self.brush_size, orient=tk.HORIZONTAL, length=80, bg="#e0e0e0", fg="black", highlightthickness=0).pack(side=tk.LEFT)
+        
+        # Settings - Wand
+        tk.Label(self.tool_frame, text="| 魔棒阈值:", bg="#e0e0e0", fg="black").pack(side=tk.LEFT, padx=(10, 2))
+        spin_wand = ttk.Spinbox(self.tool_frame, from_=0, to=100, textvariable=self.wand_tolerance, width=3)
+        spin_wand.pack(side=tk.LEFT, padx=2)
         
         # Actions
-        tk.Button(self.tool_frame, text="撤销 (Ctrl+Z)", command=self.undo_action, bg="#e0e0e0", fg="black").pack(side=tk.LEFT, padx=10)
-        tk.Button(self.tool_frame, text="导出 Label", command=self.export_label, bg="lightblue", fg="black").pack(side=tk.LEFT, padx=5)
+        # 使用 ttk.Button 以获得更干净的外观（去除可能的黑色背景）
+        ttk.Button(self.tool_frame, text="撤销 (Ctrl+Z)", command=self.undo_action).pack(side=tk.LEFT, padx=(20, 5))
+        ttk.Button(self.tool_frame, text="导出 Label", command=self.export_label).pack(side=tk.LEFT, padx=5)
 
         # 0. 底部状态栏 (提示栏)
         # 增大高度：使用 Frame + height / padding
@@ -158,9 +163,9 @@ class NiiViewerApp:
         chk_pred = tk.Checkbutton(ctrl_frame, text="显示预测 (Pred)", variable=self.show_pred, 
                                   bg="#f0f0f0", fg="black", command=self.update_display)
         chk_pred.pack(anchor="w")
-        chk_gt = tk.Checkbutton(ctrl_frame, text="显示真值 (GT)", variable=self.show_gt, 
+        self.chk_gt = tk.Checkbutton(ctrl_frame, text="显示真值 (GT)", variable=self.show_gt, 
                                 bg="#f0f0f0", fg="black", command=self.update_display)
-        chk_gt.pack(anchor="w")
+        self.chk_gt.pack(anchor="w")
 
         # 旋转按钮
         btn_rot = ttk.Button(ctrl_frame, text="旋转 90°", command=self.rotate_image)
@@ -313,6 +318,14 @@ class NiiViewerApp:
                 self.previous_layout_mode = None
             self.rb_right.config(text="仅真值 (GT Only)")
             
+            # 如果没有GT，禁用GT查看; 否则启用
+            if self.current_case_data and self.current_case_data.get('gt') is None:
+                self.rb_right.config(state=tk.DISABLED)
+                self.chk_gt.config(state=tk.DISABLED)
+            else:
+                self.rb_right.config(state=tk.NORMAL)
+                self.chk_gt.config(state=tk.NORMAL)
+            
             # 清除编辑状态信息
             self.status_metrics_msg.set("")
             self.lbl_metrics_bottom.config(fg="gray")
@@ -345,8 +358,43 @@ class NiiViewerApp:
             self.root.event_generate("<<UpdateStatusColor>>")
             return
 
+        # --- 重置状态: 退出编辑，默认双窗，清空显示 ---
+        self.current_case_data = {}
+        
+        if self.edit_mode.get():
+            self.edit_mode.set(False)
+            self.toggle_edit_mode()
+            
+        self.layout_mode.set("dual")
+        
+        # 清空图像和文本
+        self.tk_img_left = None
+        self.tk_img_right = None
+        self.panel_left.config(image='', text="MRI + Prediction")
+        self.panel_right.config(image='', text="MRI + Ground Truth")
+        
+        # 恢复默认双窗布局
+        self.panel_left.pack_forget()
+        self.panel_right.pack_forget()
+        self.panel_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+        self.panel_right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=2)
+        
+        # 清空指标和Info
+        self.metrics_text.set("")
+        self.status_metrics_msg.set("")
+        self.lbl_metrics_bottom.config(fg="gray")
+        self.slice_info_text.set("Slice: 0 / 0")
+        self.slice_scale.config(to=0)
+        self.slice_scale.set(0)
+        
+        # 启用相关按钮 (等待加载新病例时再决定禁用与否)
+        self.chk_gt.config(state=tk.NORMAL)
+        self.rb_right.config(state=tk.NORMAL)
+        self.rb_diff.config(state=tk.DISABLED) # Diff 默认禁用直到加载数据
+
         # 2. 检查可选文件夹
         self.root_dir = path
+        self.checked_export_dir = False # 重置导出文件夹检查状态
         
         pred_tr_path = os.path.join(path, "predictsTr")
         self.has_pred_folder = os.path.exists(pred_tr_path) and os.path.isdir(pred_tr_path)
@@ -532,6 +580,7 @@ class NiiViewerApp:
                 # 功能全开
                 self.rb_diff.config(state=tk.NORMAL)
                 self.rb_right.config(state=tk.NORMAL)
+                self.chk_gt.config(state=tk.NORMAL)
             else:
                 # 缺失 Pred 或 GT，部分功能禁用
                 if pred_data is None:
@@ -549,8 +598,10 @@ class NiiViewerApp:
                 # 如果没有GT，禁用GT查看; 否则启用
                 if gt_data is None:
                     self.rb_right.config(state=tk.DISABLED)
+                    self.chk_gt.config(state=tk.DISABLED)
                 else:
                     self.rb_right.config(state=tk.NORMAL)
+                    self.chk_gt.config(state=tk.NORMAL)
                 
                 # 如果当前处于不可用模式(例如Diff)，强制切回左图
                 if self.layout_mode.get() == "diff" or (self.layout_mode.get() == "right" and gt_data is None):
@@ -913,7 +964,10 @@ class NiiViewerApp:
                 self.tk_img_right = ImageTk.PhotoImage(img_right_display)
                 self.panel_right.config(image=self.tk_img_right, text="")
             else:
-                self.panel_right.config(image='', text="No Ground Truth Available")
+                img_right_pil = self.create_overlay(mri_slice, None, False)
+                img_right_display = self.process_zoom_pan(img_right_pil, display_constraints)
+                self.tk_img_right = ImageTk.PhotoImage(img_right_display)
+                self.panel_right.config(image=self.tk_img_right, text="")
 
     def screen_to_image_coords(self, sx, sy, img_w, img_h):
         """将屏幕坐标转换为 Slice 图像坐标"""
@@ -1069,14 +1123,17 @@ class NiiViewerApp:
         :param mri_view: 当前显示的 MRI 切片 (用于 wand)
         """
         h, w = mri_view.shape
-        radius = self.brush_size.get()
+        # 将 brush_size 视为直径
+        # size=1 -> radius=0.5 -> dist_sq <= 0.25 -> 仅中心点
+        # size=2 -> radius=1.0 -> dist_sq <= 1.0 -> 十字
+        draw_radius = self.brush_size.get() / 2.0
         
         y, x = np.ogrid[:h, :w]
         
         if tool in ["pen", "eraser"]:
             # 圆形笔刷
             dist_sq = (x - img_x)**2 + (y - img_y)**2
-            mask = dist_sq <= radius**2
+            mask = dist_sq <= (draw_radius**2 + 1e-9)
             return mask
             
         elif tool == "wand":
@@ -1178,29 +1235,43 @@ class NiiViewerApp:
         except (IndexError, TypeError):
             messagebox.showerror("错误", "无法获取当前病例信息")
             return
+
+        # 确定导出文件夹路径
+        export_dir = os.path.join(self.root_dir, "EditLabelTrs")
         
-        # 默认文件名
-        case_name = current_case.get('name', 'unknown_case')
-        if not case_name or case_name.strip() == '':
-            case_name = 'unknown_case'
-        default_name = f"{case_name}_gt_new.nii.gz"
+        # 第一次导出时检查/创建文件夹
+        if not getattr(self, 'checked_export_dir', False):
+            if os.path.exists(export_dir):
+                if not os.path.isdir(export_dir):
+                    messagebox.showerror("错误", f"路径存在但不是文件夹:\n{export_dir}")
+                    return
+                # 文件夹已存在，提醒用户
+                if not messagebox.askyesno("文件夹已存在", 
+                                           f"检测到导出文件夹 'EditLabelTrs' 已经在根目录中存在:\n{export_dir}\n\n是否继续使用该文件夹保存文件？"):
+                    return
+            else:
+                # 文件夹不存在，创建
+                try:
+                    os.makedirs(export_dir)
+                except Exception as e:
+                    messagebox.showerror("创建文件夹失败", f"无法创建 'EditLabelTrs':\n{e}")
+                    return
+            
+            # 标记为已检查，本次会话后续导出不再询问
+            self.checked_export_dir = True
         
-        # 确保初始目录存在
-        if not os.path.exists(self.last_export_dir):
-            self.last_export_dir = os.path.expanduser("~")
+        # 构造文件名
+        # 使用 CaseName.nii.gz 格式 (如果需要保留 _gt 后缀，可以修改此处)
+        case_name = current_case.get('name', 'unknown')
+        filename = f"{case_name}.nii.gz"
+        file_path = os.path.join(export_dir, filename)
         
-        file_path = filedialog.asksaveasfilename(
-            initialdir=self.last_export_dir,
-            initialfile=default_name
-        )
-        
-        if not file_path:
-            return
+        # 检查文件覆盖
+        if os.path.exists(file_path):
+            if not messagebox.askyesno("覆盖确认", f"文件 {filename} 在 EditLabelTrs 中已存在。\n是否覆盖？", icon='warning'):
+                return
             
         try:
-            # 更新上次路径
-            self.last_export_dir = os.path.dirname(file_path)
-            
             # 构造 NIfTI 对象
             # 重要: 使用原始 MRI 的 affine header，确保空间位置一致
             ref_img = nib.load(current_case['mri_path'])
@@ -1209,7 +1280,9 @@ class NiiViewerApp:
             new_img = nib.Nifti1Image(self.editable_mask.astype(np.float32), ref_img.affine, ref_img.header)
             nib.save(new_img, file_path)
             
-            messagebox.showinfo("导出成功", f"Label 已保存至:\n{file_path}")
+            self.status_msg.set(f"成功导出: {filename} 至 EditLabelTrs")
+            self.status_color.set("blue")
+            self.root.event_generate("<<UpdateStatusColor>>")
             
         except Exception as e:
             messagebox.showerror("导出失败", f"保存文件时出错:\n{e}")
