@@ -263,6 +263,10 @@ class NiiViewerApp:
         self.root.bind("<Control-z>", lambda e: self.undo_action())
         self.root.bind("<Command-z>", lambda e: self.undo_action()) # Mac Support
 
+        # 绑定左右键切换切片
+        self.root.bind("<Left>", lambda e: self.move_slice(-1))
+        self.root.bind("<Right>", lambda e: self.move_slice(1))
+
         # 初始化工具栏状态 (必须在 UI 元素创建完成后调用)
         self.toggle_edit_mode()
 
@@ -1312,6 +1316,18 @@ class NiiViewerApp:
         if 0 <= new_index < self.total_slices:
             self.current_slice_index = new_index
             self.slice_scale.set(new_index) # 同步更新滑动条
+            self.update_display()
+
+    def move_slice(self, delta):
+        """键盘切换切片"""
+        if not self.current_case_data:
+            return
+            
+        new_index = self.current_slice_index + delta
+        # 边界检查
+        if 0 <= new_index < self.total_slices:
+            self.current_slice_index = new_index
+            self.slice_scale.set(new_index) # 更新滑动条
             self.update_display()
 
     def on_slider_change(self, val):
