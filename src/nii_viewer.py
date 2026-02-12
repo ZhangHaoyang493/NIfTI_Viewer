@@ -1,4 +1,5 @@
 import os
+import json
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 import numpy as np
@@ -18,6 +19,8 @@ class NiiViewerApp:
         self.valid_cases = [] # 存储字典: {'name': str, 'mri_path': str, 'pred_path': str, 'gt_path': str or None}
         self.current_case_data = {} # 存储加载后的numpy数组: 'mri', 'pred', 'gt'
         self.current_case_info = None  # 当前已加载病例的元信息字典
+        self.ui_state_path = os.path.join(os.path.expanduser("~"), ".nifti_viewer_ui.json")
+        self.sidebar_group_state = self.load_sidebar_group_state()
         self.has_pred_folder = False
         self.has_gt_folder = False
         
@@ -25,6 +28,7 @@ class NiiViewerApp:
         self.status_msg = tk.StringVar(value="请选择根文件夹 (需包含 imagesTr [必须], predictsTr [可选], labelsTr [可选])")
         self.status_color = tk.StringVar(value="black")
         self.status_metrics_msg = tk.StringVar(value="") # 状态栏的指标信息
+        self.status_summary_msg = tk.StringVar(value="")
         self.gamma_val = tk.DoubleVar(value=1.0)
         self.show_pred = tk.BooleanVar(value=True)
         self.show_gt = tk.BooleanVar(value=True)
@@ -84,44 +88,116 @@ class NiiViewerApp:
         except Exception:
             pass
 
-        style.configure("TButton", padding=(10, 4), font=("Arial", 10))
-        style.configure("TCombobox", padding=3, font=("Arial", 10))
+        # 基础样式
+        style.configure(
+            "TButton",
+            padding=(10, 5),
+            font=("Arial", 10),
+            background="#ffffff",
+            foreground="#1f2937",
+            borderwidth=1,
+            relief="solid"
+        )
+        style.map(
+            "TButton",
+            background=[("active", "#f3f4f6"), ("pressed", "#e5e7eb")],
+            foreground=[("disabled", "#9ca3af")]
+        )
+
+        # 分组标题按钮
+        style.configure(
+            "Group.TButton",
+            padding=(8, 4),
+            font=("Arial", 10, "bold"),
+            background="#ffffff",
+            foreground="#111827",
+            borderwidth=1,
+            relief="solid"
+        )
+        style.map("Group.TButton", background=[("active", "#f8fafc"), ("pressed", "#f3f4f6")])
+
+        # 强调按钮（导入/导出）
+        style.configure(
+            "Accent.TButton",
+            padding=(10, 5),
+            font=("Arial", 10, "bold"),
+            background="#0ea5e9",
+            foreground="#ffffff",
+            borderwidth=1,
+            relief="solid"
+        )
+        style.map("Accent.TButton", background=[("active", "#0284c7"), ("pressed", "#0369a1")])
+
+        style.configure("TCombobox", padding=3, font=("Arial", 10), fieldbackground="#ffffff")
         style.configure("TLabelframe.Label", font=("Arial", 10, "bold"))
-        style.configure("TSeparator", background="#c7c7c7")
+        style.configure("TSeparator", background="#d1d5db")
+
+    def load_sidebar_group_state(self):
+        """读取侧栏分组展开状态"""
+        try:
+            if os.path.exists(self.ui_state_path):
+                with open(self.ui_state_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    groups = data.get("sidebar_groups", {})
+                    if isinstance(groups, dict):
+                        return groups
+        except Exception:
+            pass
+        return {}
+
+    def save_sidebar_group_state(self):
+        """保存侧栏分组展开状态"""
+        try:
+            data = {"sidebar_groups": self.sidebar_group_state}
+            with open(self.ui_state_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            # 状态保存失败不影响主流程
+            pass
 
     def _setup_ui(self):
         """配置界面布局"""
         self._setup_styles()
+        self.colors = {
+            "app_bg": "#eef2f7",
+            "toolbar_bg": "#f8fafc",
+            "sidebar_bg": "#e9eef5",
+            "card_bg": "#ffffff",
+            "text": "#1f2937",
+            "muted_text": "#6b7280",
+            "divider": "#d1d5db"
+        }
+        self.root.configure(bg=self.colors["app_bg"])
 
         # --- 顶部工具栏 (编辑工具) ---
-        toolbar = tk.Frame(self.root, bg="#ececec", height=46)
+        toolbar = tk.Frame(self.root, bg=self.colors["toolbar_bg"], height=48)
         toolbar.pack(side=tk.TOP, fill=tk.X)
         toolbar.pack_propagate(False)
         
         # Edit Toggle
         chk_edit = tk.Checkbutton(toolbar, text="编辑模式", variable=self.edit_mode, 
-                                  bg="#ececec", fg="black", command=self.toggle_edit_mode)
+                                  bg=self.colors["toolbar_bg"], fg=self.colors["text"], command=self.toggle_edit_mode)
         chk_edit.pack(side=tk.LEFT, padx=(10, 8), pady=7)
 
         ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8), pady=6)
         
         # Tools
-        self.tool_frame = tk.Frame(toolbar, bg="#ececec")
+        self.tool_frame = tk.Frame(toolbar, bg=self.colors["toolbar_bg"])
         self.tool_frame.pack(side=tk.LEFT)
         
-        tk.Label(self.tool_frame, text="工具:", bg="#ececec", fg="black").pack(side=tk.LEFT, padx=5)
+        tk.Label(self.tool_frame, text="工具:", bg=self.colors["toolbar_bg"], fg=self.colors["text"]).pack(side=tk.LEFT, padx=5)
         
-        rb_pen = tk.Radiobutton(self.tool_frame, text="画笔", variable=self.current_tool, value="pen", bg="#ececec", fg="black")
+        rb_pen = tk.Radiobutton(self.tool_frame, text="画笔", variable=self.current_tool, value="pen", bg=self.colors["toolbar_bg"], fg=self.colors["text"])
         rb_pen.pack(side=tk.LEFT)
         
-        rb_erase = tk.Radiobutton(self.tool_frame, text="橡皮擦", variable=self.current_tool, value="eraser", bg="#ececec", fg="black")
+        rb_erase = tk.Radiobutton(self.tool_frame, text="橡皮擦", variable=self.current_tool, value="eraser", bg=self.colors["toolbar_bg"], fg=self.colors["text"])
         rb_erase.pack(side=tk.LEFT)
         
-        rb_wand = tk.Radiobutton(self.tool_frame, text="魔棒", variable=self.current_tool, value="wand", bg="#ececec", fg="black")
+        rb_wand = tk.Radiobutton(self.tool_frame, text="魔棒", variable=self.current_tool, value="wand", bg=self.colors["toolbar_bg"], fg=self.colors["text"])
         rb_wand.pack(side=tk.LEFT)
         
         # Label Value
-        tk.Label(self.tool_frame, text="| 标签值:", bg="#ececec", fg="black").pack(side=tk.LEFT, padx=5)
+        tk.Label(self.tool_frame, text="| 标签值:", bg=self.colors["toolbar_bg"], fg=self.colors["text"]).pack(side=tk.LEFT, padx=5)
         self.cmb_edit_label = ttk.Combobox(
             self.tool_frame,
             textvariable=self.edit_label_name,
@@ -132,53 +208,72 @@ class NiiViewerApp:
         self.cmb_edit_label.pack(side=tk.LEFT, padx=2)
         self.cmb_edit_label.bind("<<ComboboxSelected>>", self.on_edit_label_changed)
         
-        # Settings - Brush
-        tk.Label(self.tool_frame, text="| 笔刷大小:", bg="#ececec", fg="black").pack(side=tk.LEFT, padx=(10, 2))
-        tk.Scale(self.tool_frame, from_=1, to=10, variable=self.brush_size, orient=tk.HORIZONTAL, length=80, bg="#ececec", fg="black", highlightthickness=0).pack(side=tk.LEFT)
-        
-        # Settings - Wand
-        tk.Label(self.tool_frame, text="| 魔棒阈值:", bg="#ececec", fg="black").pack(side=tk.LEFT, padx=(10, 2))
-        spin_wand = ttk.Spinbox(self.tool_frame, from_=0, to=100, textvariable=self.wand_tolerance, width=3)
-        spin_wand.pack(side=tk.LEFT, padx=2)
-        
+        # Settings - Brush / Wand（按工具动态显示）
+        self.brush_ctrl_frame = tk.Frame(self.tool_frame, bg=self.colors["toolbar_bg"])
+        tk.Label(self.brush_ctrl_frame, text="| 笔刷大小:", bg=self.colors["toolbar_bg"], fg=self.colors["text"]).pack(side=tk.LEFT, padx=(10, 2))
+        self.scale_brush = tk.Scale(
+            self.brush_ctrl_frame,
+            from_=1,
+            to=10,
+            variable=self.brush_size,
+            orient=tk.HORIZONTAL,
+            length=80,
+            bg=self.colors["toolbar_bg"],
+            fg=self.colors["text"],
+            highlightthickness=0
+        )
+        self.scale_brush.pack(side=tk.LEFT)
+        self.brush_ctrl_frame.pack(side=tk.LEFT)
+
+        self.wand_ctrl_frame = tk.Frame(self.tool_frame, bg=self.colors["toolbar_bg"])
+        tk.Label(self.wand_ctrl_frame, text="| 魔棒阈值:", bg=self.colors["toolbar_bg"], fg=self.colors["text"]).pack(side=tk.LEFT, padx=(10, 2))
+        self.spin_wand = ttk.Spinbox(self.wand_ctrl_frame, from_=0, to=100, textvariable=self.wand_tolerance, width=3)
+        self.spin_wand.pack(side=tk.LEFT, padx=2)
+
         # Actions
         # 使用 ttk.Button 以获得更干净的外观（去除可能的黑色背景）
-        ttk.Button(self.tool_frame, text="撤销", command=self.undo_action, width=6).pack(side=tk.LEFT, padx=(20, 5))
+        self.btn_undo_top = ttk.Button(self.tool_frame, text="撤销", command=self.undo_action, width=6)
+        self.btn_undo_top.pack(side=tk.LEFT, padx=(20, 5))
         ttk.Separator(self.tool_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=6)
-        ttk.Button(self.tool_frame, text="导入 Pred", command=lambda: self.fill_editor_from_source('pred'), width=9).pack(side=tk.LEFT, padx=4)
-        ttk.Button(self.tool_frame, text="导入 GT", command=lambda: self.fill_editor_from_source('gt'), width=8).pack(side=tk.LEFT, padx=4)
+        ttk.Button(self.tool_frame, text="导入 Pred", command=lambda: self.fill_editor_from_source('pred'), width=9, style="Accent.TButton").pack(side=tk.LEFT, padx=4)
+        ttk.Button(self.tool_frame, text="导入 GT", command=lambda: self.fill_editor_from_source('gt'), width=8, style="Accent.TButton").pack(side=tk.LEFT, padx=4)
+        self.current_tool.trace_add("write", lambda *_: self.update_tool_param_visibility())
+        self.update_tool_param_visibility()
 
         # 0. 底部状态栏 (提示栏)
         # 增大高度：使用 Frame + height / padding
-        status_frame = tk.Frame(self.root, bd=1, relief=tk.SUNKEN, height=35, bg="#f8f8f8")
+        status_frame = tk.Frame(self.root, bd=1, relief=tk.SUNKEN, height=35, bg=self.colors["card_bg"])
         status_frame.pack(side=tk.BOTTOM, fill=tk.X)
         status_frame.pack_propagate(False) # 允许 height 生效
 
         # 左侧：状态消息
         self.lbl_status = tk.Label(status_frame, textvariable=self.status_msg, 
-                                   fg="black", bg="#f8f8f8", font=("Arial", 11))
+                                   fg=self.colors["text"], bg=self.colors["card_bg"], font=("Arial", 11))
         # 增加左侧间距 padx
         self.lbl_status.pack(side=tk.LEFT, padx=(20, 0))
         
         # 中间/紧随：指标信息
         self.lbl_metrics_bottom = tk.Label(status_frame, textvariable=self.status_metrics_msg,
-                                           fg="blue", bg="#f8f8f8", font=("Arial", 11, "bold"))
+                                           fg="#2563eb", bg=self.colors["card_bg"], font=("Arial", 11, "bold"))
         self.lbl_metrics_bottom.pack(side=tk.LEFT, padx=(30, 0))
+        self.lbl_summary = tk.Label(status_frame, textvariable=self.status_summary_msg,
+                                    fg=self.colors["muted_text"], bg=self.colors["card_bg"], font=("Arial", 10))
+        self.lbl_summary.pack(side=tk.RIGHT, padx=(0, 12))
 
         # 动态绑定颜色 (针对状态消息)
         self.root.bind_all("<<UpdateStatusColor>>", lambda e: self.lbl_status.config(fg=self.status_color.get()))
 
         # 1. 侧边栏
-        self.sidebar_outer = tk.Frame(self.root, width=260, bg="#f0f0f0")
+        self.sidebar_outer = tk.Frame(self.root, width=260, bg=self.colors["sidebar_bg"])
         self.sidebar_outer.pack(side=tk.LEFT, fill=tk.Y)
         self.sidebar_outer.pack_propagate(False) # 固定宽度
-        self.sidebar_canvas = tk.Canvas(self.sidebar_outer, bg="#f0f0f0", highlightthickness=0, bd=0)
+        self.sidebar_canvas = tk.Canvas(self.sidebar_outer, bg=self.colors["sidebar_bg"], highlightthickness=0, bd=0)
         self.sidebar_scrollbar = ttk.Scrollbar(self.sidebar_outer, orient=tk.VERTICAL, command=self.sidebar_canvas.yview)
         self.sidebar_canvas.configure(yscrollcommand=self.sidebar_scrollbar.set)
         self.sidebar_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.sidebar_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        sidebar = tk.Frame(self.sidebar_canvas, bg="#f0f0f0", padx=10, pady=10)
+        sidebar = tk.Frame(self.sidebar_canvas, bg=self.colors["sidebar_bg"], padx=10, pady=10)
         self.sidebar_content = sidebar
         self.sidebar_window_id = self.sidebar_canvas.create_window((0, 0), window=sidebar, anchor="nw")
         self.sidebar_content.bind("<Configure>", self._on_sidebar_content_configure)
@@ -204,9 +299,11 @@ class NiiViewerApp:
         self.case_listbox.configure(yscrollcommand=self.case_list_scrollbar.set)
         self.case_listbox.bind('<<ListboxSelect>>', self.load_selected_case)
 
-        # 控制区
-        ctrl_frame = tk.LabelFrame(sidebar, text="显示控制", bg="#f0f0f0", fg="black", padx=5, pady=5)
-        ctrl_frame.pack(fill=tk.X, pady=10)
+        # 可折叠分组
+        self.sidebar_groups = {}
+        ctrl_frame = self.create_collapsible_group(sidebar, "显示控制", "display", default_open=False)
+        layout_frame = self.create_collapsible_group(sidebar, "窗口布局", "layout", default_open=False)
+        edit_ctrl_frame = self.create_collapsible_group(sidebar, "编辑设置", "edit", default_open=True)
 
         # Gamma 滑动条
         tk.Label(ctrl_frame, text="Gamma 校正:", bg="#f0f0f0", fg="black").pack(anchor="w")
@@ -217,100 +314,82 @@ class NiiViewerApp:
         scale_gamma.pack(fill=tk.X)
 
         # 复选框
-        chk_pred = tk.Checkbutton(ctrl_frame, text="显示预测 (Pred)", variable=self.show_pred, 
+        chk_pred = tk.Checkbutton(ctrl_frame, text="显示Pred", variable=self.show_pred, 
                                   bg="#f0f0f0", fg="black", command=self.update_display)
         chk_pred.pack(anchor="w")
-        self.chk_gt = tk.Checkbutton(ctrl_frame, text="显示真值 (GT)", variable=self.show_gt, 
+        self.chk_gt = tk.Checkbutton(ctrl_frame, text="显示GT", variable=self.show_gt, 
                                 bg="#f0f0f0", fg="black", command=self.update_display)
         self.chk_gt.pack(anchor="w")
 
         # 旋转按钮
-        btn_rot = ttk.Button(ctrl_frame, text="旋转 90°", command=self.rotate_image)
+        btn_rot = ttk.Button(ctrl_frame, text="旋转90°", command=self.rotate_image)
         btn_rot.pack(fill=tk.X, pady=(5, 0))
 
-        # 布局控制
-        layout_frame = tk.LabelFrame(sidebar, text="窗口布局", bg="#f0f0f0", fg="black", padx=5, pady=5)
-        layout_frame.pack(fill=tk.X, pady=10)
-        
-        rb_dual = tk.Radiobutton(layout_frame, text="双窗对比 (Dual)", variable=self.layout_mode, value="dual",
+        rb_dual = tk.Radiobutton(layout_frame, text="双窗", variable=self.layout_mode, value="dual",
                                  bg="#f0f0f0", fg="black", command=self.update_display)
         rb_dual.pack(anchor="w")
         
-        rb_left = tk.Radiobutton(layout_frame, text="仅预测 (Pred Only)", variable=self.layout_mode, value="left",
+        rb_left = tk.Radiobutton(layout_frame, text="Pred", variable=self.layout_mode, value="left",
                                  bg="#f0f0f0", fg="black", command=self.update_display)
         rb_left.pack(anchor="w")
         
-        self.rb_right = tk.Radiobutton(layout_frame, text="仅真值 (GT Only)", variable=self.layout_mode, value="right",
+        self.rb_right = tk.Radiobutton(layout_frame, text="GT", variable=self.layout_mode, value="right",
                                        bg="#f0f0f0", fg="black", command=self.update_display)
         self.rb_right.pack(anchor="w")
 
-        self.rb_diff = tk.Radiobutton(layout_frame, text="差异分析 (Diff)", variable=self.layout_mode, value="diff",
+        self.rb_diff = tk.Radiobutton(layout_frame, text="Diff", variable=self.layout_mode, value="diff",
                                       bg="#f0f0f0", fg="black", command=self.update_display, state=tk.DISABLED)
         self.rb_diff.pack(anchor="w")
 
         # 自适应窗口开关
-        chk_autofit = tk.Checkbutton(layout_frame, text="自适应窗口大小", variable=self.auto_fit_window, 
+        chk_autofit = tk.Checkbutton(layout_frame, text="自适应", variable=self.auto_fit_window, 
                                      bg="#f0f0f0", fg="black", command=self.update_display)
         chk_autofit.pack(anchor="w", pady=(5, 0))
 
-        # 编辑模式参考窗控制
-        chk_ref_fixed = tk.Checkbutton(
-            layout_frame,
-            text="编辑参考窗固定宽度",
-            variable=self.edit_ref_fixed,
-            bg="#f0f0f0",
-            fg="black",
-            command=self.on_edit_ref_setting_changed
-        )
-        chk_ref_fixed.pack(anchor="w", pady=(5, 0))
+        edit_ctrl_frame.grid_columnconfigure(0, weight=1)
 
-        self.scale_ref_width = tk.Scale(
-            layout_frame,
-            from_=140,
-            to=360,
-            variable=self.edit_ref_width,
-            orient=tk.HORIZONTAL,
-            length=170,
-            bg="#f0f0f0",
-            fg="black",
-            highlightthickness=0,
-            label="参考窗宽度",
-            command=lambda x: self.update_display()
-        )
-        self.scale_ref_width.pack(anchor="w", fill=tk.X)
-        
-        edit_ctrl_frame = tk.LabelFrame(sidebar, text="编辑设置", bg="#f0f0f0", fg="black", padx=6, pady=6)
-        edit_ctrl_frame.pack(fill=tk.X, pady=(6, 10))
-        edit_ctrl_frame.grid_columnconfigure(1, weight=1)
-
-        tk.Label(edit_ctrl_frame, text="填充策略", bg="#f0f0f0", fg="black").grid(row=0, column=0, sticky="w", padx=(0, 6), pady=2)
+        row_fill = tk.Frame(edit_ctrl_frame, bg="#f0f0f0")
+        row_fill.grid(row=0, column=0, sticky="ew")
+        tk.Label(row_fill, text="填充", bg="#f0f0f0", fg="black").pack(side=tk.LEFT, padx=(0, 6))
         self.cmb_fill_strategy = ttk.Combobox(
-            edit_ctrl_frame,
+            row_fill,
             textvariable=self.fill_strategy,
             values=["仅填充空白", "替换全部"],
             state="readonly",
-            width=12
+            width=9
         )
-        self.cmb_fill_strategy.grid(row=0, column=1, sticky="ew", pady=2)
-        tk.Label(edit_ctrl_frame, text="填充范围", bg="#f0f0f0", fg="black").grid(row=1, column=0, sticky="w", padx=(0, 6), pady=2)
+        self.cmb_fill_strategy.pack(side=tk.LEFT, padx=(0, 4))
         self.cmb_fill_scope = ttk.Combobox(
-            edit_ctrl_frame,
+            row_fill,
             textvariable=self.fill_scope,
             values=["整卷", "当前切片"],
             state="readonly",
-            width=12
+            width=8
         )
-        self.cmb_fill_scope.grid(row=1, column=1, sticky="ew", pady=2)
-        tk.Label(edit_ctrl_frame, text="引导层", bg="#f0f0f0", fg="black").grid(row=2, column=0, sticky="w", padx=(0, 6), pady=2)
+        self.cmb_fill_scope.pack(side=tk.LEFT)
+
+        row_guide = tk.Frame(edit_ctrl_frame, bg="#f0f0f0")
+        row_guide.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        tk.Label(row_guide, text="引导", bg="#f0f0f0", fg="black").pack(side=tk.LEFT, padx=(0, 6))
         self.cmb_guide_overlay = ttk.Combobox(
-            edit_ctrl_frame,
+            row_guide,
             textvariable=self.guide_overlay_mode,
             values=["无", "Pred", "GT", "Pred+GT"],
             state="readonly",
-            width=12
+            width=9
         )
-        self.cmb_guide_overlay.grid(row=2, column=1, sticky="ew", pady=2)
+        self.cmb_guide_overlay.pack(side=tk.LEFT, padx=(0, 4))
         self.cmb_guide_overlay.bind("<<ComboboxSelected>>", lambda e: self.update_display())
+        self.chk_guide_edges_only = tk.Checkbutton(
+            row_guide,
+            text="仅边界",
+            variable=self.guide_edges_only,
+            bg="#f0f0f0",
+            fg="black",
+            command=self.update_display
+        )
+        self.chk_guide_edges_only.pack(side=tk.LEFT)
+
         self.scale_guide_alpha = tk.Scale(
             edit_ctrl_frame,
             from_=0,
@@ -323,16 +402,33 @@ class NiiViewerApp:
             label="引导透明度",
             command=lambda x: self.update_display()
         )
-        self.scale_guide_alpha.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(2, 0))
-        self.chk_guide_edges_only = tk.Checkbutton(
-            edit_ctrl_frame,
-            text="仅显示引导边界",
-            variable=self.guide_edges_only,
+        self.scale_guide_alpha.grid(row=2, column=0, sticky="ew", pady=(2, 0))
+
+        row_ref = tk.Frame(edit_ctrl_frame, bg="#f0f0f0")
+        row_ref.grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        chk_ref_fixed = tk.Checkbutton(
+            row_ref,
+            text="固定参考窗宽度",
+            variable=self.edit_ref_fixed,
             bg="#f0f0f0",
             fg="black",
-            command=self.update_display
+            command=self.on_edit_ref_setting_changed
         )
-        self.chk_guide_edges_only.grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        chk_ref_fixed.pack(side=tk.LEFT)
+        self.scale_ref_width = tk.Scale(
+            edit_ctrl_frame,
+            from_=140,
+            to=360,
+            variable=self.edit_ref_width,
+            orient=tk.HORIZONTAL,
+            length=170,
+            bg="#f0f0f0",
+            fg="black",
+            highlightthickness=0,
+            label="参考窗宽度",
+            command=lambda x: self.update_display()
+        )
+        self.scale_ref_width.grid(row=4, column=0, sticky="ew", pady=(2, 0))
 
         self.edit_widgets = [
             self.cmb_fill_strategy,
@@ -360,11 +456,11 @@ class NiiViewerApp:
         self.lbl_slice_info.pack(anchor="c")
 
         # 编辑快捷操作
-        action_row = tk.Frame(sidebar, bg="#f0f0f0")
+        action_row = tk.Frame(sidebar, bg=self.colors["sidebar_bg"])
         action_row.pack(fill=tk.X, pady=(4, 8))
         self.btn_undo_sidebar = ttk.Button(action_row, text="撤销 (Ctrl+Z)", command=self.undo_action, state=tk.DISABLED, width=14)
         self.btn_undo_sidebar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
-        self.btn_export_sidebar = ttk.Button(action_row, text="导出 Label", command=self.export_label, state=tk.DISABLED, width=12)
+        self.btn_export_sidebar = ttk.Button(action_row, text="导出 Label", command=self.export_label, state=tk.DISABLED, width=12, style="Accent.TButton")
         self.btn_export_sidebar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 0))
 
         # 评估指标
@@ -451,20 +547,24 @@ class NiiViewerApp:
         # 初始化工具栏状态 (必须在 UI 元素创建完成后调用)
         self.toggle_edit_mode()
 
+    def _set_widget_state_recursive(self, widget, is_editing):
+        """递归设置控件状态，处理嵌套 Frame 内子控件"""
+        for child in widget.winfo_children():
+            try:
+                if isinstance(child, ttk.Combobox):
+                    child.configure(state="readonly" if is_editing else "disabled")
+                else:
+                    child.configure(state=tk.NORMAL if is_editing else tk.DISABLED)
+            except Exception:
+                pass
+            self._set_widget_state_recursive(child, is_editing)
+
     def toggle_edit_mode(self):
         """切换编辑模式状态"""
         is_editing = self.edit_mode.get()
         # 启用/禁用工具栏控件
         state = tk.NORMAL if is_editing else tk.DISABLED
-        for frame in [self.tool_frame]:
-            for child in frame.winfo_children():
-                try:
-                    if isinstance(child, ttk.Combobox):
-                        child.configure(state="readonly" if is_editing else "disabled")
-                    else:
-                        child.configure(state=state)
-                except:
-                    pass 
+        self._set_widget_state_recursive(self.tool_frame, is_editing)
         if hasattr(self, "edit_widgets"):
             for widget in self.edit_widgets:
                 try:
@@ -533,11 +633,24 @@ class NiiViewerApp:
             self.status_metrics_msg.set("")
             self.lbl_metrics_bottom.config(fg="gray")
             
+        self.update_tool_param_visibility()
         self.update_display()
 
     def on_edit_label_changed(self, event=None):
         """下拉框切换标签值"""
         self.edit_label_val.set(1 if self.edit_label_name.get() == "Label 1" else 2)
+
+    def update_tool_param_visibility(self):
+        """仅显示当前工具相关参数，降低顶栏噪声"""
+        if not hasattr(self, "brush_ctrl_frame") or not hasattr(self, "wand_ctrl_frame"):
+            return
+        tool = self.current_tool.get()
+        self.brush_ctrl_frame.pack_forget()
+        self.wand_ctrl_frame.pack_forget()
+        if tool in ["pen", "eraser"]:
+            self.brush_ctrl_frame.pack(side=tk.LEFT, before=self.btn_undo_top)
+        elif tool == "wand":
+            self.wand_ctrl_frame.pack(side=tk.LEFT, before=self.btn_undo_top)
 
     def _on_sidebar_content_configure(self, event=None):
         """更新侧栏滚动区域"""
@@ -568,6 +681,80 @@ class NiiViewerApp:
             self.sidebar_canvas.yview_scroll(1, "units")
         elif event.num == 4 or event.delta > 0:
             self.sidebar_canvas.yview_scroll(-1, "units")
+
+    def create_collapsible_group(self, parent, title, key, default_open=True):
+        """创建可折叠分组"""
+        container = tk.Frame(parent, bg=self.colors["sidebar_bg"])
+        container.pack(fill=tk.X, pady=(6, 0))
+        btn = ttk.Button(container, text="", style="Group.TButton", command=lambda k=key: self.toggle_sidebar_group(k))
+        btn.pack(fill=tk.X)
+        body = tk.Frame(container, bg=self.colors["card_bg"], padx=6, pady=6, highlightthickness=1, highlightbackground=self.colors["divider"])
+        initial_open = self.sidebar_group_state.get(key, default_open)
+        self.sidebar_groups[key] = {
+            "title": title,
+            "container": container,
+            "button": btn,
+            "body": body,
+            "open": initial_open
+        }
+        self._refresh_sidebar_group(key)
+        return body
+
+    def _refresh_sidebar_group(self, key):
+        group = self.sidebar_groups[key]
+        arrow = "▼" if group["open"] else "▶"
+        summary = self.get_sidebar_group_summary(key)
+        if summary:
+            group["button"].configure(text=f"{arrow} {group['title']}  |  {summary}")
+        else:
+            group["button"].configure(text=f"{arrow} {group['title']}")
+        if group["open"]:
+            group["body"].pack(fill=tk.X, pady=(4, 0))
+        else:
+            group["body"].pack_forget()
+        self._on_sidebar_content_configure()
+
+    def toggle_sidebar_group(self, key):
+        """切换分组展开状态"""
+        if key not in self.sidebar_groups:
+            return
+        self.sidebar_groups[key]["open"] = not self.sidebar_groups[key]["open"]
+        self.sidebar_group_state[key] = self.sidebar_groups[key]["open"]
+        self.save_sidebar_group_state()
+        self._refresh_sidebar_group(key)
+
+    def get_sidebar_group_summary(self, key):
+        """生成折叠分组标题摘要"""
+        if key == "display":
+            pred = "Pred" if self.show_pred.get() else "-Pred"
+            gt = "GT" if self.show_gt.get() else "-GT"
+            return f"{pred}/{gt} Γ{self.gamma_val.get():.1f}"
+        if key == "layout":
+            mode_map = {
+                "dual": "双窗",
+                "left": "Pred",
+                "right": "GT",
+                "diff": "Diff"
+            }
+            mode = mode_map.get(self.layout_mode.get(), self.layout_mode.get())
+            fit = "自适应" if self.auto_fit_window.get() else "固定"
+            return f"{mode} · {fit}"
+        if key == "edit":
+            guide = self.guide_overlay_mode.get()
+            if guide != "无":
+                suffix = "边界" if self.guide_edges_only.get() else "填充"
+                guide = f"{guide}/{suffix}"
+            fill = "空白" if self.fill_strategy.get() == "仅填充空白" else "替换"
+            scope = "当前" if self.fill_scope.get() == "当前切片" else "整卷"
+            return f"引导:{guide} · 填充:{fill}/{scope}"
+        return ""
+
+    def refresh_sidebar_group_headers(self):
+        """刷新所有分组标题摘要"""
+        if not hasattr(self, "sidebar_groups"):
+            return
+        for key in self.sidebar_groups.keys():
+            self._refresh_sidebar_group(key)
 
 
     def rotate_image(self):
@@ -1199,6 +1386,8 @@ class NiiViewerApp:
     def update_display(self):
         """刷新双面板图像"""
         if not self.current_case_data:
+            self.status_summary_msg.set("")
+            self.refresh_sidebar_group_headers()
             return
 
         idx = self.current_slice_index
@@ -1337,6 +1526,8 @@ class NiiViewerApp:
             )
             self.tk_img_center = ImageTk.PhotoImage(img_edit_display)
             self.panel_center.config(image=self.tk_img_center, text="")
+            self.update_status_summary(mode)
+            self.refresh_sidebar_group_headers()
             return
 
         # --- 生成左图 (MRI + Pred) OR (Diff Map) ---
@@ -1374,6 +1565,25 @@ class NiiViewerApp:
                 )
                 self.tk_img_right = ImageTk.PhotoImage(img_right_display)
                 self.panel_right.config(image=self.tk_img_right, text="")
+
+        self.update_status_summary(mode)
+        self.refresh_sidebar_group_headers()
+
+    def update_status_summary(self, mode):
+        """底部单行摘要：当前病例、切片、引导层、填充策略"""
+        case_name = "未加载"
+        if getattr(self, "current_case_info", None):
+            case_name = self.current_case_info.get("name", "未知病例")
+        guide_part = self.guide_overlay_mode.get()
+        if self.edit_mode.get() and guide_part != "无":
+            if self.guide_edges_only.get():
+                guide_part = f"{guide_part}-边界"
+            guide_part = f"{guide_part}({self.guide_overlay_alpha.get()}%)"
+        summary = (
+            f"Case: {case_name} | Slice: {self.current_slice_index + 1}/{self.total_slices} | "
+            f"Mode: {mode} | Guide: {guide_part} | Fill: {self.fill_strategy.get()}/{self.fill_scope.get()}"
+        )
+        self.status_summary_msg.set(summary)
 
     def get_active_edit_panel(self):
         """当前用于编辑的主面板"""
