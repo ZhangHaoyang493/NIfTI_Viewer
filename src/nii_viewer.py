@@ -72,6 +72,7 @@ class NiiViewerApp:
         self.tk_img_left = None
         self.tk_img_right = None
         self.tk_img_center = None
+        self.tk_img_ref_mri = None
         self.tk_img_ref_pred = None
         self.tk_img_ref_gt = None
         self.panel_disp_sizes = {}
@@ -237,6 +238,8 @@ class NiiViewerApp:
         ttk.Separator(self.tool_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=6)
         ttk.Button(self.tool_frame, text="导入 Pred", command=lambda: self.fill_editor_from_source('pred'), width=9, style="Accent.TButton").pack(side=tk.LEFT, padx=4)
         ttk.Button(self.tool_frame, text="导入 GT", command=lambda: self.fill_editor_from_source('gt'), width=8, style="Accent.TButton").pack(side=tk.LEFT, padx=4)
+        ttk.Button(self.tool_frame, text="减去 Pred", command=lambda: self.subtract_editor_by_source('pred'), width=9).pack(side=tk.LEFT, padx=4)
+        ttk.Button(self.tool_frame, text="减去 GT", command=lambda: self.subtract_editor_by_source('gt'), width=8).pack(side=tk.LEFT, padx=4)
         self.current_tool.trace_add("write", lambda *_: self.update_tool_param_visibility())
         self.update_tool_param_visibility()
 
@@ -481,6 +484,9 @@ class NiiViewerApp:
 
         # 编辑模式参考区：左侧上下两个小窗（Pred / Label）
         self.ref_container = tk.Frame(self.main_panel, bg="#f3f3f3", width=260)
+        self.ref_mri_frame = tk.LabelFrame(self.ref_container, text="原图参考", bg="#f3f3f3", fg="black")
+        self.panel_ref_mri = tk.Label(self.ref_mri_frame, bg="#e0e0e0", text="MRI", fg="black")
+        self.panel_ref_mri.pack(fill=tk.BOTH, expand=True)
         self.ref_pred_frame = tk.LabelFrame(self.ref_container, text="Pred 参考", bg="#f3f3f3", fg="black")
         self.panel_ref_pred = tk.Label(self.ref_pred_frame, bg="#e0e0e0", text="无 Predict", fg="black")
         self.panel_ref_pred.pack(fill=tk.BOTH, expand=True)
@@ -501,6 +507,10 @@ class NiiViewerApp:
         self.panel_center.bind("<Button-4>", self.on_scroll)
         self.panel_center.bind("<Button-5>", self.on_scroll)
 
+        self.panel_ref_mri.bind("<MouseWheel>", self.on_scroll)
+        self.panel_ref_mri.bind("<Button-4>", self.on_scroll)
+        self.panel_ref_mri.bind("<Button-5>", self.on_scroll)
+
         self.panel_ref_pred.bind("<MouseWheel>", self.on_scroll)
         self.panel_ref_pred.bind("<Button-4>", self.on_scroll)
         self.panel_ref_pred.bind("<Button-5>", self.on_scroll)
@@ -514,7 +524,7 @@ class NiiViewerApp:
         self.panel_right.bind("<Button-5>", self.on_scroll)
 
         # 绑定缩放和平移事件
-        for panel in [self.panel_left, self.panel_center, self.panel_right, self.panel_ref_pred, self.panel_ref_gt]:
+        for panel in [self.panel_left, self.panel_center, self.panel_right, self.panel_ref_mri, self.panel_ref_pred, self.panel_ref_gt]:
             # 缩放: Ctrl + 滚轮 (Windows/Mac) / Ctrl + Button-4/5 (Linux)
             # Mac有些系统是 Command，这里先绑定 Control
             panel.bind("<Control-MouseWheel>", self.on_zoom)
@@ -807,16 +817,19 @@ class NiiViewerApp:
         self.tk_img_left = None
         self.tk_img_right = None
         self.tk_img_center = None
+        self.tk_img_ref_mri = None
         self.tk_img_ref_pred = None
         self.tk_img_ref_gt = None
         self.panel_left.config(image='', text="MRI + Prediction")
         self.panel_center.config(image='', text="Editor")
         self.panel_right.config(image='', text="MRI + Ground Truth")
+        self.panel_ref_mri.config(image='', text="MRI")
         self.panel_ref_pred.config(image='', text="无 Predict")
         self.panel_ref_gt.config(image='', text="无 Label")
         
         # 恢复默认双窗布局
         self.ref_container.pack_forget()
+        self.ref_mri_frame.pack_forget()
         self.ref_pred_frame.pack_forget()
         self.ref_gt_frame.pack_forget()
         self.panel_left.pack_forget()
@@ -1418,7 +1431,8 @@ class NiiViewerApp:
             if self.edit_mode.get():
                 has_pred_ref = pred_slice is not None
                 has_gt_ref = gt_slice is not None
-                has_ref = has_pred_ref or has_gt_ref
+                ref_slots = 1 + int(has_pred_ref) + int(has_gt_ref)  # MRI 参考始终占 1 个
+                has_ref = True
                 if self.edit_ref_fixed.get():
                     ref_w = int(self.edit_ref_width.get())
                     if has_ref:
@@ -1432,7 +1446,7 @@ class NiiViewerApp:
                         ref_w = max(140, mw - 320)
                         center_w = mw - ref_w
                 center_constraints = (max(320, center_w), mh)
-                mini_constraints = (max(140, ref_w - 10), max(140, mh // 2 - 16))
+                mini_constraints = (max(140, ref_w - 10), max(120, mh // ref_slots - 16))
             elif mode == "dual":
                 display_constraints = (mw // 2, mh)
             else:
@@ -1447,6 +1461,7 @@ class NiiViewerApp:
 
         # 1. 重置布局 (防止残留)
         self.ref_container.pack_forget()
+        self.ref_mri_frame.pack_forget()
         self.ref_pred_frame.pack_forget()
         self.ref_gt_frame.pack_forget()
         self.panel_left.pack_forget()
@@ -1455,12 +1470,12 @@ class NiiViewerApp:
 
         # 2. 根据模式 Pack
         if self.edit_mode.get():
-            if pred_slice is not None or gt_slice is not None:
-                self.ref_container.pack(side=tk.LEFT, fill=tk.Y, expand=False, padx=2)
-                if pred_slice is not None:
-                    self.ref_pred_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 2))
-                if gt_slice is not None:
-                    self.ref_gt_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(2, 0))
+            self.ref_container.pack(side=tk.LEFT, fill=tk.Y, expand=False, padx=2)
+            self.ref_mri_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 2))
+            if pred_slice is not None:
+                self.ref_pred_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(2, 2))
+            if gt_slice is not None:
+                self.ref_gt_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(2, 0))
             self.panel_center.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
         else:
             if mode == "dual":
@@ -1476,6 +1491,12 @@ class NiiViewerApp:
 
         # --- 编辑模式：左侧上下参考窗 + 中间编辑 ---
         if self.edit_mode.get():
+            # MRI 参考（上）
+            img_ref_mri_pil = self.create_overlay(mri_slice, None, False)
+            img_ref_mri_display = self.process_zoom_pan(img_ref_mri_pil, mini_constraints, panel=self.panel_ref_mri)
+            self.tk_img_ref_mri = ImageTk.PhotoImage(img_ref_mri_display)
+            self.panel_ref_mri.config(image=self.tk_img_ref_mri, text="")
+
             # Pred 参考（上）
             if pred_slice is not None:
                 img_ref_pred_pil = self.create_overlay(mri_slice, pred_slice, True)
@@ -1790,6 +1811,53 @@ class NiiViewerApp:
         self.edit_source = source_key
         source_text = "模型预测" if source_key == "pred" else "GT标签"
         self.status_metrics_msg.set(f"已填充: {source_text} | 策略: {strategy} | 范围: {scope}")
+        self.lbl_metrics_bottom.config(fg="blue")
+        self.update_display()
+
+    def subtract_editor_by_source(self, source_key):
+        """从当前编辑掩码中减去 Pred/GT 标签（可撤销）"""
+        if not self.current_case_data:
+            return
+        if self.editable_mask is None:
+            self.status_metrics_msg.set("当前没有可减去的编辑结果")
+            self.lbl_metrics_bottom.config(fg="gray")
+            return
+
+        source_data = self.current_case_data.get(source_key)
+        if source_data is None:
+            source_name = "GT" if source_key == "gt" else "Pred"
+            messagebox.showwarning("提示", f"当前病例没有可用的 {source_name} 数据")
+            return
+
+        source_data = source_data.astype(np.int8)
+        scope = self.fill_scope.get()  # 整卷 / 当前切片
+        slice_only = scope == "当前切片"
+        changed = False
+
+        if slice_only:
+            idx = self.current_slice_index
+            old_slice = self.editable_mask[:, :, idx].copy()
+            src_slice = source_data[:, :, idx]
+            dst_slice = self.editable_mask[:, :, idx]
+            subtract_mask = (src_slice != 0) & (dst_slice != 0)
+            changed = np.any(subtract_mask)
+            if changed:
+                self.push_undo_entry({"kind": "slice", "idx": idx, "data": old_slice})
+                dst_slice[subtract_mask] = 0
+        else:
+            subtract_mask = (source_data != 0) & (self.editable_mask != 0)
+            changed = np.any(subtract_mask)
+            if changed:
+                self.push_undo_entry({"kind": "full", "data": self.editable_mask.copy()})
+                self.editable_mask[subtract_mask] = 0
+
+        if not changed:
+            self.status_metrics_msg.set("减去完成: 无变化（没有重叠标签）")
+            self.lbl_metrics_bottom.config(fg="gray")
+            return
+
+        source_text = "模型预测" if source_key == "pred" else "GT标签"
+        self.status_metrics_msg.set(f"已减去: {source_text} | 范围: {scope}")
         self.lbl_metrics_bottom.config(fg="blue")
         self.update_display()
 
