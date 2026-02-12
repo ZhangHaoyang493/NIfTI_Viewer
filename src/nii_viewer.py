@@ -704,6 +704,8 @@ class NiiViewerApp:
         group = self.sidebar_groups[key]
         arrow = "▼" if group["open"] else "▶"
         summary = self.get_sidebar_group_summary(key)
+        if summary and len(summary) > 34:
+            summary = summary[:31] + "..."
         if summary:
             group["button"].configure(text=f"{arrow} {group['title']}  |  {summary}")
         else:
@@ -728,7 +730,7 @@ class NiiViewerApp:
         if key == "display":
             pred = "Pred" if self.show_pred.get() else "-Pred"
             gt = "GT" if self.show_gt.get() else "-GT"
-            return f"{pred}/{gt} Γ{self.gamma_val.get():.1f}"
+            return f"显示:{pred}/{gt} Γ{self.gamma_val.get():.1f}"
         if key == "layout":
             mode_map = {
                 "dual": "双窗",
@@ -738,7 +740,7 @@ class NiiViewerApp:
             }
             mode = mode_map.get(self.layout_mode.get(), self.layout_mode.get())
             fit = "自适应" if self.auto_fit_window.get() else "固定"
-            return f"{mode} · {fit}"
+            return f"布局:{mode} · {fit}"
         if key == "edit":
             guide = self.guide_overlay_mode.get()
             if guide != "无":
@@ -1584,6 +1586,10 @@ class NiiViewerApp:
             f"Mode: {mode} | Guide: {guide_part} | Fill: {self.fill_strategy.get()}/{self.fill_scope.get()}"
         )
         self.status_summary_msg.set(summary)
+        if self.edit_mode.get():
+            self.lbl_summary.config(fg="#0369a1")
+        else:
+            self.lbl_summary.config(fg=self.colors["muted_text"])
 
     def get_active_edit_panel(self):
         """当前用于编辑的主面板"""
