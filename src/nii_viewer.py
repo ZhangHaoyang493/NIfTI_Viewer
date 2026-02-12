@@ -17,6 +17,7 @@ class NiiViewerApp:
         self.root_dir = ""
         self.valid_cases = [] # 存储字典: {'name': str, 'mri_path': str, 'pred_path': str, 'gt_path': str or None}
         self.current_case_data = {} # 存储加载后的numpy数组: 'mri', 'pred', 'gt'
+        self.current_case_info = None  # 当前已加载病例的元信息字典
         self.has_pred_folder = False
         self.has_gt_folder = False
         
@@ -605,6 +606,7 @@ class NiiViewerApp:
 
         # --- 重置状态: 退出编辑，默认双窗，清空显示 ---
         self.current_case_data = {}
+        self.current_case_info = None
         
         if self.edit_mode.get():
             self.edit_mode.set(False)
@@ -746,6 +748,7 @@ class NiiViewerApp:
 
         index = selection[0]
         case = self.valid_cases[index]
+        self.current_case_info = case
 
         # --- 检查并提示缺失文件 ---
         missing_files = []
@@ -889,6 +892,7 @@ class NiiViewerApp:
         except Exception as e:
             messagebox.showerror("加载错误", f"无法加载文件: {str(e)}")
             self.current_case_data = {}
+            self.current_case_info = None
             self.metrics_text.set("")
             self.status_metrics_msg.set("")
             self.panel_left.config(image='', text="Error")
@@ -1708,17 +1712,19 @@ class NiiViewerApp:
             messagebox.showwarning("警告", "没有可导出的编辑数据")
             return
 
-            
-        # 检查是否有选中的case
-        try:
-            selection = self.case_listbox.curselection()
-            if not selection:
-                messagebox.showwarning("警告", "请先选择一个病例")
+        
+        # 优先使用当前已加载病例；若不存在再回退到列表选中项
+        current_case = self.current_case_info
+        if current_case is None:
+            try:
+                selection = self.case_listbox.curselection()
+                if not selection:
+                    messagebox.showwarning("警告", "请先加载一个病例后再导出")
+                    return
+                current_case = self.valid_cases[selection[0]]
+            except (IndexError, TypeError):
+                messagebox.showerror("错误", "无法获取当前病例信息")
                 return
-            current_case = self.valid_cases[selection[0]]
-        except (IndexError, TypeError):
-            messagebox.showerror("错误", "无法获取当前病例信息")
-            return
 
         # 确定导出文件夹路径
         export_dir = os.path.join(self.root_dir, "EditLabelTrs")
