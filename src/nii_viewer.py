@@ -168,7 +168,7 @@ class NiiViewerApp:
         self.root.bind_all("<<UpdateStatusColor>>", lambda e: self.lbl_status.config(fg=self.status_color.get()))
 
         # 1. 侧边栏
-        self.sidebar_outer = tk.Frame(self.root, width=300, bg="#f0f0f0")
+        self.sidebar_outer = tk.Frame(self.root, width=260, bg="#f0f0f0")
         self.sidebar_outer.pack(side=tk.LEFT, fill=tk.Y)
         self.sidebar_outer.pack_propagate(False) # 固定宽度
         self.sidebar_canvas = tk.Canvas(self.sidebar_outer, bg="#f0f0f0", highlightthickness=0, bd=0)
@@ -194,8 +194,13 @@ class NiiViewerApp:
         # 文件夹列表
         lbl_list = tk.Label(sidebar, textvariable=self.case_list_title, bg="#f0f0f0", fg="black", anchor="w")
         lbl_list.pack(fill=tk.X)
-        self.case_listbox = tk.Listbox(sidebar, selectmode=tk.SINGLE, fg="black", bg="white")
-        self.case_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
+        case_list_frame = tk.Frame(sidebar, bg="#f0f0f0")
+        case_list_frame.pack(fill=tk.X, pady=5)
+        self.case_listbox = tk.Listbox(case_list_frame, selectmode=tk.SINGLE, fg="black", bg="white", height=5)
+        self.case_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.case_list_scrollbar = ttk.Scrollbar(case_list_frame, orient=tk.VERTICAL, command=self.case_listbox.yview)
+        self.case_list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.case_listbox.configure(yscrollcommand=self.case_list_scrollbar.set)
         self.case_listbox.bind('<<ListboxSelect>>', self.load_selected_case)
 
         # 控制区
