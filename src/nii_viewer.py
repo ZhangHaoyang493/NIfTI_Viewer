@@ -240,6 +240,8 @@ class NiiViewerApp:
         ttk.Button(self.tool_frame, text="导入 GT", command=lambda: self.fill_editor_from_source('gt'), width=8, style="Accent.TButton").pack(side=tk.LEFT, padx=4)
         ttk.Button(self.tool_frame, text="减去 Pred", command=lambda: self.subtract_editor_by_source('pred'), width=9).pack(side=tk.LEFT, padx=4)
         ttk.Button(self.tool_frame, text="减去 GT", command=lambda: self.subtract_editor_by_source('gt'), width=8).pack(side=tk.LEFT, padx=4)
+        ttk.Button(self.tool_frame, text="全部转 Label 1", command=lambda: self.convert_all_labels_to(1), width=12).pack(side=tk.LEFT, padx=4)
+        ttk.Button(self.tool_frame, text="全部转 Label 2", command=lambda: self.convert_all_labels_to(2), width=12).pack(side=tk.LEFT, padx=4)
         self.current_tool.trace_add("write", lambda *_: self.update_tool_param_visibility())
         self.update_tool_param_visibility()
 
@@ -1081,9 +1083,9 @@ class NiiViewerApp:
             
             self.undo_stack.clear() # 清空撤销栈
 
-            # 重置切片索引到中间
+            # 默认切片: 第一个含 Pred/GT 标签的切片；若无则回退到中间
             self.total_slices = mri_data.shape[2]
-            self.current_slice_index = self.total_slices // 2
+            self.current_slice_index = self.get_default_slice_index(pred_data, gt_data, self.total_slices)
             
             # 更新滑动条
             self.slice_scale.config(to=self.total_slices - 1)
@@ -1120,6 +1122,20 @@ class NiiViewerApp:
         d1, i1 = compute_dice_iou(pred, gt, 1)
         d2, i2 = compute_dice_iou(pred, gt, 2)
         return d1, i1, d2, i2
+
+    def get_default_slice_index(self, pred_data, gt_data, total_slices):
+        """默认切片: 第一个包含 Pred 或 GT 标签的切片；若无则回退到中间切片"""
+        has_label_slices = np.zeros(total_slices, dtype=bool)
+
+        if pred_data is not None:
+            has_label_slices |= np.any(pred_data != 0, axis=(0, 1))
+        if gt_data is not None:
+            has_label_slices |= np.any(gt_data != 0, axis=(0, 1))
+
+        labeled_indices = np.flatnonzero(has_label_slices)
+        if labeled_indices.size > 0:
+            return int(labeled_indices[0])
+        return total_slices // 2
 
     def normalize_mri(self, slice_data):
         """将MRI切片归一化到 0-255 并进行 Gamma 变换"""
@@ -1861,6 +1877,47 @@ class NiiViewerApp:
         self.lbl_metrics_bottom.config(fg="blue")
         self.update_display()
 
+    def convert_all_labels_to(self, target_label):
+        """将编辑掩码中的全部非0标签一键转换为指定标签（可撤销）"""
+        if not self.current_case_data:
+            return
+        if self.editable_mask is None:
+            self.status_metrics_msg.set("当前没有可转换的编辑结果")
+            self.lbl_metrics_bottom.config(fg="gray")
+            return
+
+        scope = self.fill_scope.get()  # 整卷 / 当前切片
+        slice_only = scope == "当前切片"
+        changed = False
+
+        if slice_only:
+            idx = self.current_slice_index
+            old_slice = self.editable_mask[:, :, idx].copy()
+            dst_slice = self.editable_mask[:, :, idx]
+            convert_mask = (dst_slice != 0) & (dst_slice != target_label)
+            changed = np.any(convert_mask)
+            if changed:
+                self.push_undo_entry({"kind": "slice", "idx": idx, "data": old_slice})
+                dst_slice[convert_mask] = target_label
+        else:
+            convert_mask = (self.editable_mask != 0) & (self.editable_mask != target_label)
+            changed = np.any(convert_mask)
+            if changed:
+                self.push_undo_entry({"kind": "full", "data": self.editable_mask.copy()})
+                self.editable_mask[convert_mask] = target_label
+
+        if not changed:
+            self.status_metrics_msg.set(f"转换完成: 无变化（已全部为 Label {target_label} 或为空）")
+            self.lbl_metrics_bottom.config(fg="gray")
+            return
+
+        # 同步当前编辑标签选择，方便继续绘制
+        self.edit_label_val.set(target_label)
+        self.edit_label_name.set(f"Label {target_label}")
+        self.status_metrics_msg.set(f"已一键转换: 全部标签 -> Label {target_label} | 范围: {scope}")
+        self.lbl_metrics_bottom.config(fg="blue")
+        self.update_display()
+
     def undo_action(self):
         """撤销上一次编辑"""
         if not self.undo_stack:
@@ -2051,7 +2108,7 @@ class NiiViewerApp:
             ref_img = nib.load(current_case['mri_path'])
             ref_img = nib.as_closest_canonical(ref_img) # 确保与我们编辑的空间一致
             
-            new_img = nib.Nifti1Image(self.editable_mask.astype(np.float32), ref_img.affine, ref_img.header)
+            new_img = nib.Nifti1Image(self.editable_mask.astype(np.int8), ref_img.affine, ref_img.header)
             nib.save(new_img, file_path)
             
             self.status_msg.set(f"成功导出: {filename} 至 EditLabelTrs")
