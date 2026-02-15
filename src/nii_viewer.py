@@ -98,7 +98,8 @@ class NiiViewerApp:
         
         # Settings - Brush
         tk.Label(self.tool_frame, text="| 笔刷大小:", bg="#e0e0e0", fg="black").pack(side=tk.LEFT, padx=(10, 2))
-        tk.Scale(self.tool_frame, from_=1, to=10, variable=self.brush_size, orient=tk.HORIZONTAL, length=80, bg="#e0e0e0", fg="black", highlightthickness=0).pack(side=tk.LEFT)
+        self.scale_brush = tk.Scale(self.tool_frame, from_=1, to=20, variable=self.brush_size, orient=tk.HORIZONTAL, length=80, bg="#e0e0e0", fg="black", highlightthickness=0)
+        self.scale_brush.pack(side=tk.LEFT)
         
         # Settings - Wand
         tk.Label(self.tool_frame, text="| 魔棒阈值:", bg="#e0e0e0", fg="black").pack(side=tk.LEFT, padx=(10, 2))
@@ -1348,20 +1349,40 @@ class NiiViewerApp:
 
     def on_zoom(self, event):
         """处理 Zoom (Ctrl + Wheel)"""
+        # 统一处理滚轮方向: Windows/Mac用delta, Linux用num
+        is_zoom_in = False
+        if hasattr(event, 'delta') and event.delta != 0:
+            is_zoom_in = (event.delta > 0)
+        elif hasattr(event, 'num'):
+            if event.num == 4:
+                is_zoom_in = True
+            elif event.num == 5:
+                is_zoom_in = False
+        
+        # 如果处于编辑模式，且事件发生在右侧面板，则调整画笔大小
+        if self.edit_mode.get() and event.widget == self.panel_right:
+            current_size = self.brush_size.get()
+            if is_zoom_in:
+                new_size = min(20, current_size + 1)
+            else:
+                new_size = max(1, current_size - 1)
+            self.brush_size.set(new_size)
+            
+            # 如果有预览光标，立即刷新以显示新大小
+            if self.preview_cursor_pos:
+                self.update_display()
+            return
+
         if not self.current_case_data:
             return
             
         scale_factor = 1.1
-        if event.num == 5 or event.delta < 0:
-            # Zoom Out
-            self.zoom_level /= scale_factor
-        elif event.num == 4 or event.delta > 0:
-            # Zoom In
-            self.zoom_level *= scale_factor
-            
-        # 限制最小缩放
-        if self.zoom_level < 1.0:
-            self.zoom_level = 1.0
+        if not is_zoom_in:
+            # Zoom Out (limit to 0.1x)
+            self.zoom_level = max(0.1, self.zoom_level / scale_factor)
+        else:
+            # Zoom In (limit to 10.0x)
+            self.zoom_level = min(10.0, self.zoom_level * scale_factor)
             
         self.update_display()
 
