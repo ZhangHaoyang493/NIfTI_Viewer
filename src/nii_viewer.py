@@ -104,8 +104,8 @@ class NiiViewerApp:
         
         # Settings - Wand
         tk.Label(self.tool_frame, text="| 魔棒阈值:", bg="#e0e0e0", fg="black").pack(side=tk.LEFT, padx=(10, 2))
-        spin_wand = ttk.Spinbox(self.tool_frame, from_=0, to=100, textvariable=self.wand_tolerance, width=3)
-        spin_wand.pack(side=tk.LEFT, padx=2)
+        self.spin_wand = ttk.Spinbox(self.tool_frame, from_=0, to=180, textvariable=self.wand_tolerance, width=3)
+        self.spin_wand.pack(side=tk.LEFT, padx=2)
         
         # Actions
         # 使用 ttk.Button 以获得更干净的外观（去除可能的黑色背景）
@@ -1432,19 +1432,34 @@ class NiiViewerApp:
             elif event.num == 5:
                 is_zoom_in = False
         
-        # 如果处于编辑模式，且事件发生在右侧面板，则调整画笔大小
+        # 如果处于编辑模式，且事件发生在右侧面板
         if self.edit_mode.get() and event.widget == self.panel_right:
-            current_size = self.brush_size.get()
-            if is_zoom_in:
-                new_size = min(20, current_size + 1)
-            else:
-                new_size = max(1, current_size - 1)
-            self.brush_size.set(new_size)
+            # 判断当前工具
+            current_tool = self.current_tool.get()
             
-            # 如果有预览光标，立即刷新以显示新大小
-            if self.preview_cursor_pos:
-                self.update_display()
-            return
+            if current_tool == "wand": # 魔棒模式：调整阈值
+                current_tol = self.wand_tolerance.get()
+                step = 2 # 每次滚轮增减的步长，可以按需调整
+                if is_zoom_in:
+                    new_tol = min(180, current_tol + step)
+                else:
+                    new_tol = max(0, current_tol - step)
+                self.wand_tolerance.set(new_tol)
+                # 无需强制刷新 update_display，因为阈值不影响光标预览，但可以刷新状态栏等如果有的话
+                return
+
+            else: # 画笔/橡皮擦模式：调整笔刷大小
+                current_size = self.brush_size.get()
+                if is_zoom_in:
+                    new_size = min(20, current_size + 1)
+                else:
+                    new_size = max(1, current_size - 1)
+                self.brush_size.set(new_size)
+                
+                # 如果有预览光标，立即刷新以显示新大小
+                if self.preview_cursor_pos:
+                    self.update_display()
+                return
 
         if not self.current_case_data:
             return
