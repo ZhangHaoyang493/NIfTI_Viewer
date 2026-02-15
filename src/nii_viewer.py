@@ -601,15 +601,21 @@ class NiiViewerApp:
                 
                 # 如果没有GT，禁用GT查看; 否则启用
                 if gt_data is None:
-                    self.rb_right.config(state=tk.DISABLED)
+                    # [Fix] 如果在编辑模式，右屏作为编辑器需要保持启用
+                    if not self.edit_mode.get():
+                        self.rb_right.config(state=tk.DISABLED)
                     self.chk_gt.config(state=tk.DISABLED)
                 else:
                     self.rb_right.config(state=tk.NORMAL)
                     self.chk_gt.config(state=tk.NORMAL)
                 
                 # 如果当前处于不可用模式(例如Diff)，强制切回左图
-                if self.layout_mode.get() == "diff" or (self.layout_mode.get() == "right" and gt_data is None):
-                     self.layout_mode.set("left")
+                if self.layout_mode.get() == "diff":
+                    self.layout_mode.set("left")
+                elif self.layout_mode.get() == "right" and gt_data is None:
+                    # [Fix] 如果在编辑模式，允许停留在 right
+                    if not self.edit_mode.get():
+                        self.layout_mode.set("left")
 
             # --- 初始化编辑 Mask ---
             # 优先使用 GT，如果没有则使用 Pred，再没有则全0
