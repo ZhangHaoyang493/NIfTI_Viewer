@@ -26,17 +26,33 @@
 
 ## 🚀 快速开始
 
-### 依赖安装
-两个软件均依赖以下 Python 库：
-```bash
-pip install numpy nibabel pillow pydicom SimpleITK
-```
+### 环境配置 (使用 uv)
+
+本项目使用 [uv](https://docs.astral.sh/uv/) 进行依赖管理。
+
+1. **安装 uv** (如果尚未安装):
+   ```bash
+   # macOS / Linux
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   # 或者 macOS: brew install uv
+   
+   # Windows
+   powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+   # 或者使用 pip: pip install uv
+   ```
+
+2. **同步环境**:
+   在项目根目录下运行，这将自动创建虚拟环境并安装所需依赖：
+   ```bash
+   uv sync
+   ```
 
 ### 启动方式
+使用 `uv run` 直接运行应用程序（无需手动激活虚拟环境）：
 ```bash
 # 启动 DICOM 浏览器
-python src/dicom_viewer.py
+uv run src/dicom_viewer.py
 
 # 启动 NIfTI 对比工具
-python src/nii_viewer.py
+uv run src/nii_viewer.py
 ```
