@@ -63,6 +63,40 @@ class NiiViewerApp:
         # --- UI 布局 ---
         self._setup_ui()
 
+    def _create_collapsible_panel(self, parent, title, is_collapsed=True):
+        """Helper to create a collapsible LabelFrame-like structure"""
+        frame_container = tk.Frame(parent, bg="#f0f0f0", pady=5)
+        frame_container.pack(fill=tk.X)
+        
+        # Toggle Button (Functions as Header)
+        # Using a unicode arrow to indicate state
+        # Initial state text
+        icon = "▶" if is_collapsed else "▼"
+        
+        # 使用闭包来保存状态和引用
+        def toggle_panel(container=frame_container, content=None, btn=None, title_text=title):
+            if content.winfo_viewable():
+                content.pack_forget()
+                btn.config(text=f"▶ {title_text}")
+            else:
+                content.pack(fill=tk.X, expand=True)
+                btn.config(text=f"▼ {title_text}")
+
+        btn_toggle = tk.Button(frame_container, text=f"{icon} {title}", 
+                               bg="#e0e0e0", fg="black", relief=tk.FLAT, anchor="w", padx=5)
+        btn_toggle.pack(fill=tk.X)
+        
+        # Content Frame
+        frame_content = tk.Frame(frame_container, bg="#f0f0f0", padx=5, pady=5, bd=1, relief=tk.SOLID)
+        
+        # Bind command
+        btn_toggle.config(command=lambda: toggle_panel(container=frame_container, content=frame_content, btn=btn_toggle))
+        
+        if not is_collapsed:
+            frame_content.pack(fill=tk.X, expand=True)
+            
+        return frame_content
+
     def _setup_ui(self):
         """配置界面布局"""
         # --- 顶部工具栏 (编辑工具) ---
@@ -149,9 +183,8 @@ class NiiViewerApp:
         self.case_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
         self.case_listbox.bind('<<ListboxSelect>>', self.load_selected_case)
 
-        # 控制区
-        ctrl_frame = tk.LabelFrame(sidebar, text="显示控制", bg="#f0f0f0", fg="black", padx=5, pady=5)
-        ctrl_frame.pack(fill=tk.X, pady=10)
+        # 控制区 (Changed to collapsible)
+        ctrl_frame = self._create_collapsible_panel(sidebar, "显示控制", is_collapsed=True)
 
         # Gamma 滑动条
         tk.Label(ctrl_frame, text="Gamma 校正:", bg="#f0f0f0", fg="black").pack(anchor="w")
@@ -173,9 +206,8 @@ class NiiViewerApp:
         btn_rot = ttk.Button(ctrl_frame, text="旋转 90°", command=self.rotate_image)
         btn_rot.pack(fill=tk.X, pady=(5, 0))
 
-        # 布局控制
-        layout_frame = tk.LabelFrame(sidebar, text="窗口布局", bg="#f0f0f0", fg="black", padx=5, pady=5)
-        layout_frame.pack(fill=tk.X, pady=10)
+        # 布局控制 (Changed to collapsible)
+        layout_frame = self._create_collapsible_panel(sidebar, "窗口布局", is_collapsed=True)
         
         rb_dual = tk.Radiobutton(layout_frame, text="双窗对比 (Dual)", variable=self.layout_mode, value="dual",
                                  bg="#f0f0f0", fg="black", command=self.update_display)
@@ -497,6 +529,11 @@ class NiiViewerApp:
 
         index = selection[0]
         case = self.valid_cases[index]
+        
+        # 更新列表标题显示当前索引/总数
+        total_cases = len(self.valid_cases)
+        # index 是从0开始，显示为从1开始
+        self.case_list_title.set(f"病例列表 ({index + 1}/{total_cases}):")
 
         # --- 检查并提示缺失文件 ---
         missing_files = []
