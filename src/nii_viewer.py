@@ -125,6 +125,9 @@ class NiiViewerApp:
         
         rb_wand = tk.Radiobutton(self.tool_frame, text="魔棒", variable=self.current_tool, value="wand", bg="#e0e0e0", fg="black")
         rb_wand.pack(side=tk.LEFT)
+
+        rb_fill = tk.Radiobutton(self.tool_frame, text="填充", variable=self.current_tool, value="fill", bg="#e0e0e0", fg="black")
+        rb_fill.pack(side=tk.LEFT)
         
         # Label Value
         tk.Label(self.tool_frame, text="| 标签值:", bg="#e0e0e0", fg="black").pack(side=tk.LEFT, padx=5)
@@ -1105,19 +1108,28 @@ class NiiViewerApp:
         if self.edit_mode.get() and self.editable_mask is not None:
             # 判断是否点击在右侧面板 (或双窗模式下的右半屏)
             if event.widget == self.panel_right:
-                self.is_drawing = True
                 self.start_edit_action() # 准备 Undo 栈
-                
-                # 初始化起始绘制点
+
+                # 获取坐标并检查边界
                 idx = self.current_slice_index
                 mri_view = self.get_slice_view(self.current_case_data['mri'], idx)
                 view_h, view_w = mri_view.shape
                 img_x, img_y = self.screen_to_image_coords(event.x, event.y, view_w, view_h)
-                
+
                 if 0 <= img_x < view_w and 0 <= img_y < view_h:
-                    self.last_img_coords = (img_x, img_y)
-                    self.apply_tool_at_coords(img_x, img_y) # Apply to start point
-                    self.update_display()
+                    tool = self.current_tool.get()
+                    if tool == "fill":
+                         # 填充模式：单次点击触发
+                         self.apply_flood_fill(img_x, img_y)
+                         self.update_display()
+                         # 无需 is_drawing 状态
+                         return
+                    else:
+                        # 画笔/橡皮/魔棒：支持拖拽连续绘制
+                        self.is_drawing = True
+                        self.last_img_coords = (img_x, img_y)
+                        self.apply_tool_at_coords(img_x, img_y)
+                        self.update_display()
                 else:
                     self.last_img_coords = None
 
@@ -1218,6 +1230,12 @@ class NiiViewerApp:
             mask = np.zeros_like(mri_view, dtype=bool)
             self.region_grow_optimize(mri_view, mask, img_x, img_y, self.wand_tolerance.get())
             return mask
+
+        elif tool == "fill":
+             # 填充预览：仅显示鼠标位置的小十字或点，提示位置
+             dist_sq = (x - img_x)**2 + (y - img_y)**2
+             mask = dist_sq <= (0.5**2 + 1e-9) # 最小点
+             return mask
         
         return None
 
@@ -1276,6 +1294,45 @@ class NiiViewerApp:
                 
         points.append((x1, y1))
         return points
+
+    def apply_flood_fill(self, seed_x, seed_y):
+        """应用填充工具 (Flood Fill Label)"""
+        if self.editable_mask is None:
+            return
+            
+        idx = self.current_slice_index
+        mask_view = self.get_slice_view(self.editable_mask, idx)
+        
+        target_val = self.edit_label_val.get()
+        old_val = mask_view[seed_y, seed_x]
+        
+        if old_val == target_val:
+            return
+
+        # 1. 构造连通条件 map (pixel == old_val)
+        binary_map = (mask_view == old_val)
+        
+        # 2. 复用BFS逻辑找到连通区域
+        h, w = mask_view.shape
+        visited = np.zeros_like(mask_view, dtype=bool)
+        stack = [(seed_x, seed_y)]
+        visited[seed_y, seed_x] = True
+        
+        # 记录需要修改的坐标点，或者直接修改 mask_view
+        # 直接修改的话，binary_map就不需要变，因为我们要找的是原始等于old_val的连通域
+        
+        # 既然没有scipy.ndimage.label，手动BFS
+        while stack:
+            cx, cy = stack.pop()
+            # 设置新值
+            mask_view[cy, cx] = target_val
+            
+            for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
+                nx, ny = cx + dx, cy + dy
+                if 0 <= nx < w and 0 <= ny < h:
+                    if not visited[ny, nx] and binary_map[ny, nx]:
+                        visited[ny, nx] = True
+                        stack.append((nx, ny))
 
     def apply_tool_at_coords(self, img_x, img_y):
         """实际修改mask数据 (Image Coords)"""
@@ -1485,7 +1542,8 @@ class NiiViewerApp:
                 # 无需强制刷新 update_display，因为阈值不影响光标预览，但可以刷新状态栏等如果有的话
                 return
 
-            else: # 画笔/橡皮擦模式：调整笔刷大小
+            else: # 画笔/橡皮擦模式/填充模式：调整笔刷大小
+                # 填充模式不需要调整大小，但放在这里兼容也不影响
                 current_size = self.brush_size.get()
                 if is_zoom_in:
                     new_size = min(20, current_size + 1)
