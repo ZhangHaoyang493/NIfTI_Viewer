@@ -52,6 +52,7 @@ class NiiViewerApp:
         self.editable_mask = None # 3D numpy array
         self.edit_source = None # 'gt', 'pred', 'blank'
         self.is_drawing = False
+        self.last_img_coords = None # (x, y) image coordinates for interpolation
         self.preview_cursor_pos = None # (x, y) internal image coordinates
         self.previous_layout_mode = None
 
@@ -1069,7 +1070,20 @@ class NiiViewerApp:
             if event.widget == self.panel_right:
                 self.is_drawing = True
                 self.start_edit_action() # 准备 Undo 栈
-                self.apply_tool(event.x, event.y)
+                
+                # 初始化起始绘制点
+                idx = self.current_slice_index
+                mri_view = self.get_slice_view(self.current_case_data['mri'], idx)
+                view_h, view_w = mri_view.shape
+                img_x, img_y = self.screen_to_image_coords(event.x, event.y, view_w, view_h)
+                
+                if 0 <= img_x < view_w and 0 <= img_y < view_h:
+                    self.last_img_coords = (img_x, img_y)
+                    self.apply_tool_at_coords(img_x, img_y) # Apply to start point
+                    self.update_display()
+                else:
+                    self.last_img_coords = None
+
                 return
 
         # 非编辑模式或非右侧面板时，开始左键平移
@@ -1082,16 +1096,30 @@ class NiiViewerApp:
             view_h, view_w = mri_view.shape
             img_x, img_y = self.screen_to_image_coords(event.x, event.y, view_w, view_h)
             
-            if 0 <= img_x < view_w and 0 <= img_y < view_h:
+            in_bounds = (0 <= img_x < view_w and 0 <= img_y < view_h)
+            if in_bounds:
                  self.preview_cursor_pos = (img_x, img_y)
-                 
-            self.apply_tool(event.x, event.y)
+            
+            # 如果起始点有效，进行插值绘制
+            if self.last_img_coords and in_bounds:
+                self.interpolate_and_draw(self.last_img_coords, (img_x, img_y))
+                self.last_img_coords = (img_x, img_y)
+                self.update_display()
+            elif in_bounds:
+                # 之前在边界外，现在移回来了，重新开始记录
+                self.last_img_coords = (img_x, img_y)
+                self.apply_tool_at_coords(img_x, img_y)
+                self.update_display()
+            else:
+                self.last_img_coords = None # 移出边界
+                self.update_display() # Update cursor preview even if outside
         else:
             self.on_pan_drag(event)
 
     def on_mouse_up(self, event):
         if self.is_drawing:
             self.is_drawing = False
+            self.last_img_coords = None
         else:
             # Pan end
             pass
@@ -1157,23 +1185,70 @@ class NiiViewerApp:
         return None
 
     def apply_tool(self, sx, sy):
-        """应用画笔/橡皮擦/魔棒"""
+        """Deprecated: Use apply_tool_at_coords + interpolate instead. This is only for single click if used elsewhere, but on_mouse_down now calls internal methods."""
+        if self.editable_mask is None:
+            return
+            
+        mri_slice = self.get_slice_view(self.current_case_data['mri'], self.current_slice_index)
+        h, w = mri_slice.shape
+        
+        img_x, img_y = self.screen_to_image_coords(sx, sy, w, h)
+        
+        if 0 <= img_x < w and 0 <= img_y < h:
+            self.apply_tool_at_coords(img_x, img_y)
+            self.update_display()
+
+    def interpolate_and_draw(self, p1, p2):
+        """Image space interpolation"""
+        x0, y0 = p1
+        x1, y1 = p2
+        
+        # Simple integer interpolation
+        points = self.get_line_points(int(x0), int(y0), int(x1), int(y1))
+        
+        for px, py in points:
+             self.apply_tool_at_coords(px, py)
+    
+    def get_line_points(self, x0, y0, x1, y1):
+        """Bresenham's Line Algorithm for integer coords"""
+        points = []
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        x, y = x0, y0
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        
+        if dx > dy:
+            err = dx / 2.0
+            while x != x1:
+                points.append((x, y))
+                err -= dy
+                if err < 0:
+                    y += sy
+                    err += dx
+                x += sx
+        else:
+            err = dy / 2.0
+            while y != y1:
+                points.append((x, y))
+                err -= dx
+                if err < 0:
+                    x += sx
+                    err += dy
+                y += sy
+                
+        points.append((x1, y1))
+        return points
+
+    def apply_tool_at_coords(self, img_x, img_y):
+        """实际修改mask数据 (Image Coords)"""
         if self.editable_mask is None:
             return
             
         idx = self.current_slice_index
-        
-        # 1. 获取当前切片的 View (用于坐标映射和读取 intensities)
         mri_view = self.get_slice_view(self.current_case_data['mri'], idx)
         mask_view = self.get_slice_view(self.editable_mask, idx)
         
-        # 2. 转换坐标
-        h, w = mask_view.shape
-        img_x, img_y = self.screen_to_image_coords(sx, sy, w, h)
-        
-        if not (0 <= img_x < w and 0 <= img_y < h):
-            return
-
         tool = self.current_tool.get()
         target_val = self.edit_label_val.get() if tool != "eraser" else 0
         
@@ -1183,8 +1258,6 @@ class NiiViewerApp:
         if change_mask is not None:
             # 应用修改
             mask_view[change_mask] = target_val
-
-        self.update_display()
 
     def region_grow_optimize(self, img, mask, seed_x, seed_y, tolerance):
         """
