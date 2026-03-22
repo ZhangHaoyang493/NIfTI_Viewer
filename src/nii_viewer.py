@@ -758,6 +758,18 @@ class NiiViewerApp:
             
         return slice_radio
 
+    def set_slice_view(self, data, idx, slice_view):
+        """将 Radiological 视图切片写回原始 3D 数据 (RAS)"""
+        if data is None or slice_view is None:
+            return
+
+        view = slice_view
+        if self.rotation_k != 0:
+            view = np.rot90(view, k=-self.rotation_k)
+
+        raw_slice = view[::-1, ::-1].T
+        data[:, :, idx] = raw_slice
+
     def create_overlay(self, mri_slice, mask_slice, color_mask_enabled=True, preview_mask=None, preview_val=1):
         """
         创建叠加图像
@@ -1301,7 +1313,7 @@ class NiiViewerApp:
             return
             
         idx = self.current_slice_index
-        mask_view = self.get_slice_view(self.editable_mask, idx)
+        mask_view = self.get_slice_view(self.editable_mask, idx).copy()
         
         target_val = self.edit_label_val.get()
         old_val = mask_view[seed_y, seed_x]
@@ -1334,6 +1346,8 @@ class NiiViewerApp:
                         visited[ny, nx] = True
                         stack.append((nx, ny))
 
+        self.set_slice_view(self.editable_mask, idx, mask_view)
+
     def apply_tool_at_coords(self, img_x, img_y):
         """实际修改mask数据 (Image Coords)"""
         if self.editable_mask is None:
@@ -1341,7 +1355,7 @@ class NiiViewerApp:
             
         idx = self.current_slice_index
         mri_view = self.get_slice_view(self.current_case_data['mri'], idx)
-        mask_view = self.get_slice_view(self.editable_mask, idx)
+        mask_view = self.get_slice_view(self.editable_mask, idx).copy()
         
         tool = self.current_tool.get()
         target_val = self.edit_label_val.get() if tool != "eraser" else 0
@@ -1352,6 +1366,7 @@ class NiiViewerApp:
         if change_mask is not None:
             # 应用修改
             mask_view[change_mask] = target_val
+            self.set_slice_view(self.editable_mask, idx, mask_view)
 
     def region_grow_optimize(self, img, mask, seed_x, seed_y, tolerance):
         """
@@ -1455,7 +1470,9 @@ class NiiViewerApp:
             ref_img = nib.load(current_case['mri_path'])
             ref_img = nib.as_closest_canonical(ref_img) # 确保与我们编辑的空间一致
             
-            new_img = nib.Nifti1Image(self.editable_mask.astype(np.float32), ref_img.affine, ref_img.header)
+            export_data = self.editable_mask.astype(np.uint8)
+            new_img = nib.Nifti1Image(export_data, ref_img.affine)
+            new_img.set_data_dtype(np.uint8)
             nib.save(new_img, file_path)
             
             self.status_msg.set(f"成功导出: {filename} 至 EditLabelTrs")
