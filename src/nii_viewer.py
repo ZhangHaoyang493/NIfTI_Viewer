@@ -147,6 +147,7 @@ class NiiViewerApp:
         # Actions
         # 使用 ttk.Button 以获得更干净的外观（去除可能的黑色背景）
         ttk.Button(self.tool_frame, text="撤销 (Ctrl+Z)", command=self.undo_action).pack(side=tk.LEFT, padx=(20, 5))
+        ttk.Button(self.tool_frame, text="反转 1↔2", command=self.invert_current_slice_labels).pack(side=tk.LEFT, padx=5)
         ttk.Button(self.tool_frame, text="导出 Label", command=self.export_label).pack(side=tk.LEFT, padx=5)
 
         # 0. 底部状态栏 (提示栏)
@@ -1214,6 +1215,31 @@ class NiiViewerApp:
         # 如果当前就在这个切片，刷新显示
         if idx == self.current_slice_index:
             self.update_display()
+
+    def invert_current_slice_labels(self):
+        """将当前切片中的 label 1 与 label 2 互换"""
+        if not self.edit_mode.get():
+            return
+        if self.editable_mask is None:
+            messagebox.showwarning("警告", "没有可编辑的标签数据")
+            return
+
+        idx = self.current_slice_index
+        mask_view = self.get_slice_view(self.editable_mask, idx).copy()
+
+        # 为撤销保存当前切片
+        self.start_edit_action()
+
+        label1_mask = (mask_view == 1)
+        label2_mask = (mask_view == 2)
+        mask_view[label1_mask] = 2
+        mask_view[label2_mask] = 1
+        self.set_slice_view(self.editable_mask, idx, mask_view)
+
+        self.status_msg.set(f"已反转当前切片标签: slice={idx} (1↔2)")
+        self.status_color.set("blue")
+        self.root.event_generate("<<UpdateStatusColor>>")
+        self.update_display()
 
     def get_tool_mask(self, tool, img_x, img_y, mri_view):
         """
