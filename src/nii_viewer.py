@@ -328,8 +328,12 @@ class NiiViewerApp:
         # 绑定左右键切换切片
         self.root.bind("<Left>", lambda e: self.move_slice(-1))
         self.root.bind("<Right>", lambda e: self.move_slice(1))
+        self.root.bind("a", lambda e: self.move_slice(-1))
+        self.root.bind("d", lambda e: self.move_slice(1))
         self.root.bind("<Up>", lambda e: self.move_case(-1))
         self.root.bind("<Down>", lambda e: self.move_case(1))
+        self.root.bind("w", lambda e: self.move_case(-1))
+        self.root.bind("s", lambda e: self.move_case(1))
 
         # 初始化工具栏状态 (必须在 UI 元素创建完成后调用)
         self.toggle_edit_mode()
