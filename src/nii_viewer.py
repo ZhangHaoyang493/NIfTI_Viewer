@@ -28,7 +28,7 @@ class NiiViewerApp:
         self.show_pred = tk.BooleanVar(value=True)
         self.show_gt = tk.BooleanVar(value=True)
         self.auto_fit_window = tk.BooleanVar(value=True) # 新增自适应变量
-        self.layout_mode = tk.StringVar(value="dual") # dual, left, right
+        self.layout_mode = tk.StringVar(value="dual") # dual, left, right, diff, ras
         self.slice_info_text = tk.StringVar(value="Slice: 0 / 0")
         self.metrics_text = tk.StringVar(value="")
         self.case_list_title = tk.StringVar(value="病例列表 (0):")
@@ -55,10 +55,18 @@ class NiiViewerApp:
         self.last_img_coords = None # (x, y) image coordinates for interpolation
         self.preview_cursor_pos = None # (x, y) internal image coordinates
         self.previous_layout_mode = None
+        self.dataset_stats_text = ""
+        self.ras_index_r = 0
+        self.ras_index_a = 0
+        self.ras_index_s = 0
+        self.current_voxel_sizes = (1.0, 1.0, 1.0)  # canonical(RAS)下的(x,y,z) spacing
 
         # 防止图片被垃圾回收
         self.tk_img_left = None
         self.tk_img_right = None
+        self.tk_img_ras_r = None
+        self.tk_img_ras_a = None
+        self.tk_img_ras_s = None
 
         # --- UI 布局 ---
         self._setup_ui()
@@ -148,6 +156,7 @@ class NiiViewerApp:
         # 使用 ttk.Button 以获得更干净的外观（去除可能的黑色背景）
         ttk.Button(self.tool_frame, text="撤销 (Ctrl+Z)", command=self.undo_action).pack(side=tk.LEFT, padx=(20, 5))
         ttk.Button(self.tool_frame, text="反转 1↔2", command=self.invert_current_slice_labels).pack(side=tk.LEFT, padx=5)
+        ttk.Button(self.tool_frame, text="反转序列", command=self.reverse_label_sequence).pack(side=tk.LEFT, padx=5)
         ttk.Button(self.tool_frame, text="导出 Label", command=self.export_label).pack(side=tk.LEFT, padx=5)
 
         # 0. 底部状态栏 (提示栏)
@@ -186,6 +195,7 @@ class NiiViewerApp:
         self.case_listbox = tk.Listbox(sidebar, selectmode=tk.SINGLE, fg="black", bg="white")
         self.case_listbox.pack(fill=tk.BOTH, expand=True, pady=5)
         self.case_listbox.bind('<<ListboxSelect>>', self.load_selected_case)
+        ttk.Button(sidebar, text="查看数据统计", command=self.show_dataset_statistics).pack(fill=tk.X, pady=(0, 10))
 
         # 控制区 (Changed to collapsible)
         ctrl_frame = self._create_collapsible_panel(sidebar, "显示控制", is_collapsed=True)
@@ -228,6 +238,8 @@ class NiiViewerApp:
         self.rb_diff = tk.Radiobutton(layout_frame, text="差异分析 (Diff)", variable=self.layout_mode, value="diff",
                                       bg="#f0f0f0", fg="black", command=self.update_display, state=tk.DISABLED)
         self.rb_diff.pack(anchor="w")
+        tk.Radiobutton(layout_frame, text="RAS 三窗 (R/A/S)", variable=self.layout_mode, value="ras",
+                       bg="#f0f0f0", fg="black", command=self.update_display).pack(anchor="w")
 
         # 自适应窗口开关
         chk_autofit = tk.Checkbutton(layout_frame, text="自适应窗口大小", variable=self.auto_fit_window, 
@@ -264,6 +276,9 @@ class NiiViewerApp:
         
         self.panel_right = tk.Label(self.main_panel, bg="#e0e0e0", text="MRI + Ground Truth", fg="black")
         self.panel_right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=2)
+        self.panel_ras_r = tk.Label(self.main_panel, bg="#e0e0e0", text="R", fg="black", font=("Arial", 12, "bold"))
+        self.panel_ras_a = tk.Label(self.main_panel, bg="#e0e0e0", text="A", fg="black", font=("Arial", 12, "bold"))
+        self.panel_ras_s = tk.Label(self.main_panel, bg="#e0e0e0", text="S", fg="black", font=("Arial", 12, "bold"))
 
         # 绑定鼠标滚轮事件 (Windows/Linux/Mac兼容)
         # Note: Linux 使用 Button-4/5, Windows/Mac 使用 MouseWheel
@@ -274,9 +289,18 @@ class NiiViewerApp:
         self.panel_right.bind("<MouseWheel>", self.on_scroll)
         self.panel_right.bind("<Button-4>", self.on_scroll)
         self.panel_right.bind("<Button-5>", self.on_scroll)
+        self.panel_ras_r.bind("<MouseWheel>", self.on_scroll)
+        self.panel_ras_r.bind("<Button-4>", self.on_scroll)
+        self.panel_ras_r.bind("<Button-5>", self.on_scroll)
+        self.panel_ras_a.bind("<MouseWheel>", self.on_scroll)
+        self.panel_ras_a.bind("<Button-4>", self.on_scroll)
+        self.panel_ras_a.bind("<Button-5>", self.on_scroll)
+        self.panel_ras_s.bind("<MouseWheel>", self.on_scroll)
+        self.panel_ras_s.bind("<Button-4>", self.on_scroll)
+        self.panel_ras_s.bind("<Button-5>", self.on_scroll)
 
         # 绑定缩放和平移事件
-        for panel in [self.panel_left, self.panel_right]:
+        for panel in [self.panel_left, self.panel_right, self.panel_ras_r, self.panel_ras_a, self.panel_ras_s]:
             # 缩放: Ctrl + 滚轮 (Windows/Mac) / Ctrl + Button-4/5 (Linux)
             # Mac有些系统是 Command，这里先绑定 Control
             panel.bind("<Control-MouseWheel>", self.on_zoom)
@@ -304,6 +328,8 @@ class NiiViewerApp:
         # 绑定左右键切换切片
         self.root.bind("<Left>", lambda e: self.move_slice(-1))
         self.root.bind("<Right>", lambda e: self.move_slice(1))
+        self.root.bind("<Up>", lambda e: self.move_case(-1))
+        self.root.bind("<Down>", lambda e: self.move_case(1))
 
         # 初始化工具栏状态 (必须在 UI 元素创建完成后调用)
         self.toggle_edit_mode()
@@ -418,6 +444,9 @@ class NiiViewerApp:
         # 恢复默认双窗布局
         self.panel_left.pack_forget()
         self.panel_right.pack_forget()
+        self.panel_ras_r.pack_forget()
+        self.panel_ras_a.pack_forget()
+        self.panel_ras_s.pack_forget()
         self.panel_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
         self.panel_right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=2)
         
@@ -523,7 +552,200 @@ class NiiViewerApp:
             self.status_msg.set(msg)
             self.status_color.set("green")
         
+        self.precompute_dataset_statistics()
         self.root.event_generate("<<UpdateStatusColor>>")
+
+    def _format_orientation(self, affine):
+        """根据 affine 返回方向字符串，如 RAS/PSI"""
+        try:
+            codes = nib.aff2axcodes(affine)
+            return ''.join(codes)
+        except Exception:
+            return "UNKNOWN"
+
+    def _format_mask_values(self, values):
+        """格式化 mask 值，优先按整数展示"""
+        formatted = []
+        for v in values:
+            fv = float(v)
+            if abs(fv - round(fv)) < 1e-6:
+                formatted.append(int(round(fv)))
+            else:
+                formatted.append(round(fv, 6))
+        return sorted(set(formatted))
+
+    def _collect_case_file_info(self, file_path, include_mask_values=False):
+        """收集单个 NIfTI 文件信息"""
+        if not file_path:
+            return {"exists": False, "error": "MISSING"}
+
+        try:
+            img = nib.load(file_path)
+            info = {
+                "exists": True,
+                "orientation": self._format_orientation(img.affine),
+                "error": None
+            }
+
+            if include_mask_values:
+                data = np.asarray(img.dataobj)
+                unique_vals = self._format_mask_values(np.unique(data))
+                fg_vals = [v for v in unique_vals if v != 0]
+                info["mask_values"] = unique_vals
+                info["fg_mask_values"] = fg_vals
+
+            return info
+        except Exception as e:
+            return {"exists": True, "error": str(e)}
+
+    def _join_case_names(self, names):
+        return ", ".join(names) if names else "无"
+
+    def _build_dataset_statistics_text(self):
+        """构建当前批次统计文本"""
+        lines = []
+        total_cases = len(self.valid_cases)
+
+        missing_pred_cases = []
+        missing_gt_cases = []
+        orientation_mismatch_cases = []
+        pred_single_mask_cases = []
+        gt_single_mask_cases = []
+        pred_empty_fg_cases = []
+        gt_empty_fg_cases = []
+        load_error_cases = []
+
+        lines.append("=== 数据逐例信息 ===")
+        lines.append("")
+
+        for idx, case in enumerate(self.valid_cases, start=1):
+            case_name = case['name']
+            lines.append(f"[{idx:03d}] {case_name}")
+
+            mri_info = self._collect_case_file_info(case['mri_path'], include_mask_values=False)
+            pred_info = self._collect_case_file_info(case.get('pred_path'), include_mask_values=True)
+            gt_info = self._collect_case_file_info(case.get('gt_path'), include_mask_values=True)
+
+            # 方向信息
+            mri_ori = mri_info.get("orientation", "ERROR")
+            pred_ori = pred_info.get("orientation", "MISSING" if not case.get('pred_path') else "ERROR")
+            gt_ori = gt_info.get("orientation", "MISSING" if not case.get('gt_path') else "ERROR")
+
+            lines.append(f"  images  orientation : {mri_ori}")
+            lines.append(f"  predicts orientation: {pred_ori}")
+            lines.append(f"  labels   orientation: {gt_ori}")
+
+            # Mask 值信息
+            if case.get('pred_path') and not pred_info.get("error"):
+                lines.append(f"  predicts mask值(含0): {pred_info['mask_values']}")
+                lines.append(f"  predicts 前景mask值 : {pred_info['fg_mask_values']}")
+            elif not case.get('pred_path'):
+                lines.append("  predicts mask值     : MISSING")
+                missing_pred_cases.append(case_name)
+            else:
+                lines.append(f"  predicts 读取错误   : {pred_info.get('error')}")
+                load_error_cases.append(f"{case_name}(predicts)")
+
+            if case.get('gt_path') and not gt_info.get("error"):
+                lines.append(f"  labels   mask值(含0): {gt_info['mask_values']}")
+                lines.append(f"  labels   前景mask值 : {gt_info['fg_mask_values']}")
+            elif not case.get('gt_path'):
+                lines.append("  labels   mask值     : MISSING")
+                missing_gt_cases.append(case_name)
+            else:
+                lines.append(f"  labels   读取错误   : {gt_info.get('error')}")
+                load_error_cases.append(f"{case_name}(labels)")
+
+            if mri_info.get("error"):
+                lines.append(f"  images   读取错误   : {mri_info.get('error')}")
+                load_error_cases.append(f"{case_name}(images)")
+
+            # 汇总：方向是否一致（仅针对成功加载且存在的模态）
+            available_orientations = []
+            if not mri_info.get("error") and mri_info.get("orientation"):
+                available_orientations.append(mri_info["orientation"])
+            if case.get('pred_path') and not pred_info.get("error") and pred_info.get("orientation"):
+                available_orientations.append(pred_info["orientation"])
+            if case.get('gt_path') and not gt_info.get("error") and gt_info.get("orientation"):
+                available_orientations.append(gt_info["orientation"])
+            if len(set(available_orientations)) > 1:
+                orientation_mismatch_cases.append(case_name)
+
+            # 汇总：单一前景 mask / 无前景
+            if case.get('pred_path') and not pred_info.get("error"):
+                fg_pred = pred_info.get("fg_mask_values", [])
+                if len(fg_pred) == 1:
+                    pred_single_mask_cases.append(f"{case_name}({fg_pred[0]})")
+                elif len(fg_pred) == 0:
+                    pred_empty_fg_cases.append(case_name)
+
+            if case.get('gt_path') and not gt_info.get("error"):
+                fg_gt = gt_info.get("fg_mask_values", [])
+                if len(fg_gt) == 1:
+                    gt_single_mask_cases.append(f"{case_name}({fg_gt[0]})")
+                elif len(fg_gt) == 0:
+                    gt_empty_fg_cases.append(case_name)
+
+            lines.append("")
+
+        lines.append("=== 汇总统计 ===")
+        lines.append(f"总病例数: {total_cases}")
+        lines.append(f"缺少 predicts 的病例数: {len(missing_pred_cases)}")
+        lines.append(f"缺少 labels 的病例数: {len(missing_gt_cases)}")
+        lines.append(f"images/predicts/labels 方向不一致病例数: {len(orientation_mismatch_cases)}")
+        lines.append(f"predicts 仅单一前景mask病例数: {len(pred_single_mask_cases)}")
+        lines.append(f"labels 仅单一前景mask病例数: {len(gt_single_mask_cases)}")
+        lines.append(f"predicts 无前景mask病例数: {len(pred_empty_fg_cases)}")
+        lines.append(f"labels 无前景mask病例数: {len(gt_empty_fg_cases)}")
+        lines.append(f"读取错误病例数: {len(load_error_cases)}")
+        lines.append("")
+        lines.append(f"方向不一致病例: {self._join_case_names(orientation_mismatch_cases)}")
+        lines.append(f"predicts 单一前景mask病例: {self._join_case_names(pred_single_mask_cases)}")
+        lines.append(f"labels 单一前景mask病例: {self._join_case_names(gt_single_mask_cases)}")
+        lines.append(f"predicts 无前景mask病例: {self._join_case_names(pred_empty_fg_cases)}")
+        lines.append(f"labels 无前景mask病例: {self._join_case_names(gt_empty_fg_cases)}")
+        lines.append(f"缺少 predicts 病例: {self._join_case_names(missing_pred_cases)}")
+        lines.append(f"缺少 labels 病例: {self._join_case_names(missing_gt_cases)}")
+        lines.append(f"读取错误病例: {self._join_case_names(load_error_cases)}")
+        return "\n".join(lines)
+
+    def precompute_dataset_statistics(self):
+        """在扫描后预计算统计文本，供弹窗直接展示"""
+        if not self.valid_cases:
+            self.dataset_stats_text = "当前没有可统计的病例，请先选择并扫描根目录。"
+            return
+        self.dataset_stats_text = self._build_dataset_statistics_text()
+
+    def show_dataset_statistics(self):
+        """弹窗展示预计算好的当前批次数据统计信息（只读）"""
+        if not self.dataset_stats_text:
+            self.precompute_dataset_statistics()
+
+        stats_window = tk.Toplevel(self.root)
+        stats_window.title("当前批次数据统计")
+        stats_window.geometry("1000x700")
+
+        text_frame = tk.Frame(stats_window)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        y_scroll = tk.Scrollbar(text_frame, orient=tk.VERTICAL)
+        y_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        x_scroll = tk.Scrollbar(text_frame, orient=tk.HORIZONTAL)
+        x_scroll.pack(side=tk.BOTTOM, fill=tk.X)
+
+        stats_text = tk.Text(
+            text_frame,
+            wrap=tk.NONE,
+            font=("Courier", 11),
+            yscrollcommand=y_scroll.set,
+            xscrollcommand=x_scroll.set
+        )
+        stats_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        y_scroll.config(command=stats_text.yview)
+        x_scroll.config(command=stats_text.xview)
+
+        stats_text.insert("1.0", self.dataset_stats_text)
+        stats_text.config(state=tk.DISABLED)
 
     def load_selected_case(self, event):
         """加载选中的病例数据"""
@@ -561,6 +783,7 @@ class NiiViewerApp:
             # 转换为 RAS 标准方向，确保切片顺序 (Inferior -> Superior) 与 Slicer 等软件一致
             mri_img = nib.as_closest_canonical(mri_img)
             mri_data = mri_img.get_fdata()
+            self.current_voxel_sizes = tuple(float(v) for v in mri_img.header.get_zooms()[:3])
             
             # 处理 3D vs 4D 数据
             if mri_data.ndim == 4:
@@ -677,6 +900,9 @@ class NiiViewerApp:
             # 重置切片索引到中间
             self.total_slices = mri_data.shape[2]
             self.current_slice_index = self.total_slices // 2
+            self.ras_index_r = mri_data.shape[0] // 2
+            self.ras_index_a = mri_data.shape[1] // 2
+            self.ras_index_s = mri_data.shape[2] // 2
             
             # 更新滑动条
             self.slice_scale.config(to=self.total_slices - 1)
@@ -758,6 +984,23 @@ class NiiViewerApp:
             slice_radio = np.rot90(slice_radio, k=self.rotation_k)
             
         return slice_radio
+
+    def get_slice_view_axis(self, data, axis, idx):
+        """按指定轴提取切片并转换为统一视图"""
+        if data is None:
+            return None
+
+        if axis == "R":
+            raw_slice = data[idx, :, :]
+        elif axis == "A":
+            raw_slice = data[:, idx, :]
+        else:  # "S"
+            raw_slice = data[:, :, idx]
+
+        slice_view = raw_slice.T[::-1, ::-1]
+        if self.rotation_k != 0:
+            slice_view = np.rot90(slice_view, k=self.rotation_k)
+        return slice_view
 
     def set_slice_view(self, data, idx, slice_view):
         """将 Radiological 视图切片写回原始 3D 数据 (RAS)"""
@@ -936,24 +1179,41 @@ class NiiViewerApp:
         
         return img_final
 
+    def adjust_ras_physical_aspect(self, img_pil, axis):
+        """按体素间距修正 R/A/S 切片的物理长宽比"""
+        if img_pil is None:
+            return img_pil
+
+        sx, sy, sz = self.current_voxel_sizes
+        if axis == "R":
+            row_spacing, col_spacing = sz, sy   # rows=Z, cols=Y
+        elif axis == "A":
+            row_spacing, col_spacing = sz, sx   # rows=Z, cols=X
+        else:  # "S"
+            row_spacing, col_spacing = sy, sx   # rows=Y, cols=X
+
+        if row_spacing <= 0 or col_spacing <= 0:
+            return img_pil
+
+        w, h = img_pil.size
+        base = min(row_spacing, col_spacing)
+        target_w = max(1, int(round(w * (col_spacing / base))))
+        target_h = max(1, int(round(h * (row_spacing / base))))
+        if target_w == w and target_h == h:
+            return img_pil
+
+        return img_pil.resize((target_w, target_h), Image.Resampling.NEAREST)
+
     def update_display(self):
         """刷新双面板图像"""
         if not self.current_case_data:
             return
 
-        idx = self.current_slice_index
-        
-        # 更新文本信息
-        self.slice_info_text.set(f"Slice: {idx + 1} / {self.total_slices}")
-
-        # 使用 helper 获取转换视角的切片
-        mri_slice = self.get_slice_view(self.current_case_data['mri'], idx)
-        pred_slice = self.get_slice_view(self.current_case_data.get('pred'), idx)
-        gt_slice = self.get_slice_view(self.current_case_data.get('gt'), idx)
-
         # --- 布局与图像生成 ---
         mode = self.layout_mode.get()
-        
+        mri_data = self.current_case_data['mri']
+        shape_x, shape_y, shape_z = mri_data.shape
+
         # 计算显示约束
         if self.auto_fit_window.get():
             # 获取主显示区的实时尺寸
@@ -966,15 +1226,47 @@ class NiiViewerApp:
             
             if mode == "dual":
                 display_constraints = (mw // 2, mh)
+            elif mode == "ras":
+                display_constraints = (mw // 3, mh)
             else:
                 display_constraints = (mw, mh)
         else:
             # 固定高度模式
-            display_constraints = 512 if mode == "dual" else 750
+            if mode == "dual":
+                display_constraints = 512
+            elif mode == "ras":
+                display_constraints = 380
+            else:
+                display_constraints = 750
+
+        if mode == "ras":
+            # RAS 模式：左侧 Slice Navigation 只显示/控制 S 轴
+            self.ras_index_r = int(np.clip(self.ras_index_r, 0, max(0, shape_x - 1)))
+            self.ras_index_a = int(np.clip(self.ras_index_a, 0, max(0, shape_y - 1)))
+            self.ras_index_s = int(np.clip(self.ras_index_s, 0, max(0, shape_z - 1)))
+
+            self.slice_scale.config(to=max(0, shape_z - 1))
+            if int(self.slice_scale.get()) != self.ras_index_s:
+                self.slice_scale.set(self.ras_index_s)
+            self.slice_info_text.set(f"S Slice: {self.ras_index_s + 1} / {shape_z}")
+        else:
+            idx = self.current_slice_index
+            self.slice_scale.config(to=max(0, shape_z - 1))
+            if int(self.slice_scale.get()) != idx:
+                self.slice_scale.set(idx)
+            self.slice_info_text.set(f"Slice: {idx + 1} / {self.total_slices}")
+
+            # 使用 helper 获取转换视角的切片
+            mri_slice = self.get_slice_view(mri_data, idx)
+            pred_slice = self.get_slice_view(self.current_case_data.get('pred'), idx)
+            gt_slice = self.get_slice_view(self.current_case_data.get('gt'), idx)
 
         # 1. 重置布局 (防止残留)
         self.panel_left.pack_forget()
         self.panel_right.pack_forget()
+        self.panel_ras_r.pack_forget()
+        self.panel_ras_a.pack_forget()
+        self.panel_ras_s.pack_forget()
 
         # 2. 根据模式 Pack
         if mode == "dual":
@@ -984,9 +1276,52 @@ class NiiViewerApp:
             self.panel_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
         elif mode == "right":
             self.panel_right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=2)
+        elif mode == "ras":
+            self.panel_ras_s.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+            self.panel_ras_a.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+            self.panel_ras_r.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
 
         # 强制更新布局计算，防止渲染和变量延迟
         self.root.update_idletasks()
+
+        if mode == "ras":
+            mri_r = self.get_slice_view_axis(mri_data, "R", self.ras_index_r)
+            mri_a = self.get_slice_view_axis(mri_data, "A", self.ras_index_a)
+            mri_s = self.get_slice_view_axis(mri_data, "S", self.ras_index_s)
+
+            # RAS 模式下标签优先级: labelsTr(GT) > predictsTr(Pred) > None
+            ras_label_data = self.current_case_data.get('gt')
+            if ras_label_data is None:
+                ras_label_data = self.current_case_data.get('pred')
+
+            if ras_label_data is not None:
+                label_r = self.get_slice_view_axis(ras_label_data, "R", self.ras_index_r)
+                label_a = self.get_slice_view_axis(ras_label_data, "A", self.ras_index_a)
+                label_s = self.get_slice_view_axis(ras_label_data, "S", self.ras_index_s)
+                img_r_pil = self.create_overlay(mri_r, label_r, True)
+                img_a_pil = self.create_overlay(mri_a, label_a, True)
+                img_s_pil = self.create_overlay(mri_s, label_s, True)
+            else:
+                img_r_pil = self.create_overlay(mri_r, None, False)
+                img_a_pil = self.create_overlay(mri_a, None, False)
+                img_s_pil = self.create_overlay(mri_s, None, False)
+
+            img_r_pil = self.adjust_ras_physical_aspect(img_r_pil, "R")
+            img_a_pil = self.adjust_ras_physical_aspect(img_a_pil, "A")
+            img_s_pil = self.adjust_ras_physical_aspect(img_s_pil, "S")
+
+            img_r_display = self.process_zoom_pan(img_r_pil, display_constraints)
+            img_a_display = self.process_zoom_pan(img_a_pil, display_constraints)
+            img_s_display = self.process_zoom_pan(img_s_pil, display_constraints)
+
+            self.tk_img_ras_r = ImageTk.PhotoImage(img_r_display)
+            self.tk_img_ras_a = ImageTk.PhotoImage(img_a_display)
+            self.tk_img_ras_s = ImageTk.PhotoImage(img_s_display)
+
+            self.panel_ras_r.config(image=self.tk_img_ras_r, text="R", compound=tk.TOP)
+            self.panel_ras_a.config(image=self.tk_img_ras_a, text="A", compound=tk.TOP)
+            self.panel_ras_s.config(image=self.tk_img_ras_s, text="S", compound=tk.TOP)
+            return
 
         # --- 生成左图 (MRI + Pred) OR (Diff Map) ---
         if mode in ["dual", "left"]:
@@ -1241,6 +1576,43 @@ class NiiViewerApp:
         self.root.event_generate("<<UpdateStatusColor>>")
         self.update_display()
 
+    def reverse_label_sequence(self):
+        """按当前选中标签反转序列: 0..N-1 -> N-1..0"""
+        if not self.edit_mode.get():
+            return
+        if self.editable_mask is None:
+            messagebox.showwarning("警告", "没有可编辑的标签数据")
+            return
+
+        if self.editable_mask.ndim < 3:
+            messagebox.showwarning("警告", "当前标签不是3D数据，无法执行序列反转")
+            return
+
+        target_label = int(self.edit_label_val.get())
+        if not messagebox.askyesno("确认反转", f"将仅反转 Label {target_label} 的序列，是否继续？", icon='warning'):
+            return
+
+        src = self.editable_mask
+        target_mask = (src == target_label)
+        if not np.any(target_mask):
+            self.status_msg.set(f"当前数据中不存在 Label {target_label}，未执行反转")
+            self.status_color.set("red")
+            self.root.event_generate("<<UpdateStatusColor>>")
+            return
+
+        # 仅反转目标标签体素，其他标签保持不变
+        reversed_target_mask = target_mask[:, :, ::-1]
+        dst = src.copy()
+        dst[target_mask] = 0
+        dst[reversed_target_mask] = target_label
+        self.editable_mask = dst
+        self.undo_stack.clear()  # 当前撤销栈仅支持单切片，避免跨序列错误撤销
+
+        self.status_msg.set(f"已反转 Label {target_label} 序列 (0..N-1 -> N-1..0)")
+        self.status_color.set("blue")
+        self.root.event_generate("<<UpdateStatusColor>>")
+        self.update_display()
+
     def get_tool_mask(self, tool, img_x, img_y, mri_view):
         """
         计算当前工具产生的 Mask (View 坐标系)
@@ -1491,13 +1863,18 @@ class NiiViewerApp:
                 return
             
         try:
-            # 构造 NIfTI 对象
-            # 重要: 使用原始 MRI 的 affine header，确保空间位置一致
-            ref_img = nib.load(current_case['mri_path'])
-            ref_img = nib.as_closest_canonical(ref_img) # 确保与我们编辑的空间一致
-            
-            export_data = self.editable_mask.astype(np.uint8)
-            new_img = nib.Nifti1Image(export_data, ref_img.affine)
+            # 导出时恢复到原始 MRI 方向，保证方向码与原始数据一致
+            ref_img_raw = nib.load(current_case['mri_path'])
+            ref_img_canonical = nib.as_closest_canonical(ref_img_raw)
+
+            raw_ornt = nib.orientations.io_orientation(ref_img_raw.affine)
+            canonical_ornt = nib.orientations.io_orientation(ref_img_canonical.affine)
+            canonical_to_raw = nib.orientations.ornt_transform(canonical_ornt, raw_ornt)
+
+            export_data_canonical = self.editable_mask.astype(np.uint8)
+            export_data_raw = nib.orientations.apply_orientation(export_data_canonical, canonical_to_raw)
+
+            new_img = nib.Nifti1Image(export_data_raw, ref_img_raw.affine, header=ref_img_raw.header.copy())
             new_img.set_data_dtype(np.uint8)
             nib.save(new_img, file_path)
             
@@ -1509,7 +1886,7 @@ class NiiViewerApp:
             messagebox.showerror("导出失败", f"保存文件时出错:\n{e}")
 
     def on_scroll(self, event):
-        """处理鼠标滚轮事件，实现双窗同步"""
+        """处理鼠标滚轮事件"""
         # 如果按下了 Control 键，则不进行切片切换 (避免与缩放冲突)
         if event.state & 0x0004: # Windows/Linux Control mask
              return
@@ -1527,9 +1904,31 @@ class NiiViewerApp:
         else:
             step = 0
 
+        mode = self.layout_mode.get()
+        if mode == "ras":
+            mri_data = self.current_case_data.get('mri')
+            if mri_data is None:
+                return
+            sx, sy, sz = mri_data.shape
+            if event.widget == self.panel_ras_r:
+                new_index = self.ras_index_r + step
+                if 0 <= new_index < sx:
+                    self.ras_index_r = new_index
+                    self.update_display()
+            elif event.widget == self.panel_ras_a:
+                new_index = self.ras_index_a + step
+                if 0 <= new_index < sy:
+                    self.ras_index_a = new_index
+                    self.update_display()
+            elif event.widget == self.panel_ras_s:
+                new_index = self.ras_index_s + step
+                if 0 <= new_index < sz:
+                    self.ras_index_s = new_index
+                    self.slice_scale.set(new_index)  # 左侧导航只跟随 S
+                    self.update_display()
+            return
+
         new_index = self.current_slice_index + step
-        
-        # 边界检查
         if 0 <= new_index < self.total_slices:
             self.current_slice_index = new_index
             self.slice_scale.set(new_index) # 同步更新滑动条
@@ -1538,6 +1937,17 @@ class NiiViewerApp:
     def move_slice(self, delta):
         """键盘切换切片"""
         if not self.current_case_data:
+            return
+        if self.layout_mode.get() == "ras":
+            mri_data = self.current_case_data.get('mri')
+            if mri_data is None:
+                return
+            sz = mri_data.shape[2]
+            new_index = self.ras_index_s + delta
+            if 0 <= new_index < sz:
+                self.ras_index_s = new_index
+                self.slice_scale.set(new_index)
+                self.update_display()
             return
             
         new_index = self.current_slice_index + delta
@@ -1551,11 +1961,39 @@ class NiiViewerApp:
         """处理滑动条拖动"""
         if not self.current_case_data:
             return
-            
+        if self.layout_mode.get() == "ras":
+            new_index = int(val)
+            if new_index != self.ras_index_s:
+                self.ras_index_s = new_index
+                self.update_display()
+            return
+
         new_index = int(val)
         if new_index != self.current_slice_index:
             self.current_slice_index = new_index
             self.update_display()
+
+    def move_case(self, delta):
+        """键盘快速切换病例（↑/↓）"""
+        total = len(self.valid_cases)
+        if total <= 0:
+            return
+
+        selection = self.case_listbox.curselection()
+        if selection:
+            current = selection[0]
+        else:
+            current = 0 if delta >= 0 else total - 1
+
+        new_index = current + delta
+        if not (0 <= new_index < total):
+            return
+
+        self.case_listbox.selection_clear(0, tk.END)
+        self.case_listbox.selection_set(new_index)
+        self.case_listbox.activate(new_index)
+        self.case_listbox.see(new_index)
+        self.load_selected_case(None)
 
     def on_zoom(self, event):
         """处理 Zoom (Ctrl + Wheel)"""
